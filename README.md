@@ -39,12 +39,13 @@ the game in seconds.
 
 ```bash
 # Debian/Ubuntu system packages SDL3 needs to build:
-sudo apt-get install -y build-essential git cmake pkg-config \
-  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
-  libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev \
-  wayland-protocols libegl1-mesa-dev libgl1-mesa-dev libdrm-dev \
-  libgbm-dev libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
-  libibus-1.0-dev
+sudo apt-get install -y build-essential git cmake pkg-config libltdl-dev \
+  libx11-dev libxft-dev libxrender-dev libxext-dev libxrandr-dev \
+  libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev \
+  libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev wayland-protocols \
+  libdecor-0-dev libegl1-mesa-dev libgl1-mesa-dev libdrm-dev libgbm-dev \
+  libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev \
+  libdbus-1-dev libibus-1.0-dev
 
 ./run_linux.sh
 ```
