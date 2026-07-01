@@ -1,11 +1,10 @@
-#include "config.h"
+#include "engine/config.h"
 
 #include <cstdlib>
-#include <fstream>
+#include <sstream>
 
 namespace {
 
-// Trims leading/trailing whitespace in place.
 std::string trim(const std::string& s) {
     const char* ws = " \t\r\n";
     size_t begin = s.find_first_not_of(ws);
@@ -16,15 +15,12 @@ std::string trim(const std::string& s) {
 
 } // namespace
 
-bool ConfigFile::loadFromFile(const std::string& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) return false;
-
-    path_ = path;
+void ConfigFile::parseText(const std::string& text) {
     values_.clear();
 
+    std::istringstream stream(text);
     std::string line;
-    while (std::getline(file, line)) {
+    while (std::getline(stream, line)) {
         size_t hash = line.find('#');
         if (hash != std::string::npos) line.erase(hash);
 
@@ -40,12 +36,6 @@ bool ConfigFile::loadFromFile(const std::string& path) {
         if (end == value.c_str()) continue; // not a number
         values_[key] = parsed;
     }
-    return true;
-}
-
-bool ConfigFile::reload() {
-    if (path_.empty()) return false;
-    return loadFromFile(path_);
 }
 
 float ConfigFile::get(const std::string& key, float fallback) const {
@@ -78,18 +68,4 @@ void MovementConfig::applyFrom(const ConfigFile& cfg) {
     crouchHeight = cfg.get("crouch_height", crouchHeight);
     eyeOffset = cfg.get("eye_offset", eyeOffset);
     crouchTransitionSpeed = cfg.get("crouch_transition_speed", crouchTransitionSpeed);
-}
-
-std::string findConfigPath(const char* exeDir) {
-    const char* relative = "config/movement.cfg";
-
-    std::ifstream cwdTry(relative);
-    if (cwdTry.is_open()) return relative;
-
-    if (exeDir && *exeDir) {
-        std::string beside = std::string(exeDir) + relative;
-        std::ifstream exeTry(beside);
-        if (exeTry.is_open()) return beside;
-    }
-    return {};
 }

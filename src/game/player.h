@@ -1,13 +1,13 @@
 #pragma once
 
-#include "config.h"
-#include "world.h"
+#include "engine/config.h"
+#include "game/world.h"
 
 #include <glm/glm.hpp>
 
 struct PlayerInput {
-    float moveForward = 0.0f; // +1 = W, -1 = S
-    float moveRight = 0.0f;   // +1 = D, -1 = A
+    float moveForward = 0.0f; // +1 = forward, -1 = back
+    float moveRight = 0.0f;   // +1 = right, -1 = left
     float yaw = 0.0f;         // radians, 0 looks down -Z
     bool jump = false;        // buffered "wants to jump this tick"
     bool crouch = false;

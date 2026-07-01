@@ -64,7 +64,7 @@ The first run clones vcpkg into `~/vcpkg`. If you already have vcpkg, set
 | F5 | Hot-reload `config/movement.cfg` |
 | F1 | Toggle debug HUD |
 | Esc | Release/capture the mouse (click to recapture) |
-| — | `--frames N` CLI flag: exit after N frames (smoke test); `--novsync` disables vsync |
+| — | CLI flags: `--frames N` (exit after N frames, smoke test), `--novsync`, `--renderer gl\|vulkan\|metal\|gles` |
 
 ## Tuning the movement
 
@@ -80,24 +80,44 @@ Things to try:
 - Counter-strafe drill: run along the checkered floor with D, then tap A —
   watch the speedometer snap to ~0 far faster than releasing keys does.
 
-## Project layout
+## Architecture (platform-safe layering)
+
+The engine is desktop-first but structured so Android/iOS/console ports never
+touch gameplay — see [PORTING.md](PORTING.md) for the full guide. Each layer
+is a separate static library, so the boundaries are enforced by the compiler:
+gameplay (`tac_game`) never sees SDL or OpenGL headers.
 
 ```
-├── config/movement.cfg      # all tunable movement constants (F5 hot-reload)
+├── config/movement.cfg          # all tunable movement constants (F5 hot-reload)
 ├── src/
-│   ├── main.cpp             # game loop: fixed-tick sim + interpolated render
-│   ├── player.{h,cpp}       # movement controller (accel/friction/air/jump/crouch)
-│   ├── world.{h,cpp}        # AABB collision world + test map
-│   ├── renderer.{h,cpp}     # GL 3.3 renderer, embedded shaders, cube batch
-│   ├── debug_text.{h,cpp}   # HUD text, embedded 5x7 bitmap font
-│   ├── config.{h,cpp}       # key=value config parser + movement constants
-│   └── gl_loader.{h,cpp}    # hand-rolled GL function loader (no glad/glew)
-├── run_windows.bat          # one-click build + run (Windows)
-├── run_linux.sh             # build + run (Linux)
-├── CMakeLists.txt
-├── vcpkg.json               # dependencies: sdl3, glm
+│   ├── main.cpp                 # composition root: picks platform + renderer, pumps loop
+│   ├── engine/                  # std-only core: logging, config parsing
+│   ├── game/                    # gameplay (glm + interfaces only, no SDL/GL)
+│   │   ├── game.{h,cpp}         # fixed-tick sim orchestration, HUD model, RenderFrame
+│   │   ├── player.{h,cpp}       # movement controller (accel/friction/air/jump/crouch)
+│   │   └── world.{h,cpp}        # AABB collision world + test map
+│   ├── platform/                # interfaces: IWindow, IInput, IFileSystem, IAudio
+│   │   └── sdl/                 # SDL3 implementations (the ONLY code touching SDL)
+│   └── renderer/
+│       ├── renderer.h           # IRenderer + createRenderer factory
+│       ├── render_types.h       # RenderFrame: pure-data frame description
+│       ├── common/font5x7.*     # embedded bitmap font shared by all backends
+│       ├── opengl/              # working GL 3.3 backend (SDL-free, loader injected)
+│       ├── vulkan/              # stub backend (planned: Windows/Linux/Android)
+│       ├── metal/               # stub backend (planned: macOS/iOS)
+│       └── mobile/              # stub GLES backend (planned: Android/iOS)
+├── run_windows.bat              # one-click build + run (Windows)
+├── run_linux.sh                 # build + run (Linux)
+├── CMakeLists.txt               # layered targets: tac_core/tac_game/tac_renderer/tac_platform_sdl
+├── CMakePresets.json
+├── PORTING.md                   # how future platforms slot in
+├── vcpkg.json                   # dependencies: sdl3, glm
 └── .github/workflows/build.yml  # CI: Windows x64, Linux x64, macOS arm64
 ```
+
+Select a renderer backend with `--renderer gl|vulkan|metal|gles` (only `gl`
+is implemented; the others are compiling stubs that fail init with a clear
+message, proving the seam).
 
 ## Building by hand
 

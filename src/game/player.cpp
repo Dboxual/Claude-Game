@@ -1,10 +1,10 @@
-#include "player.h"
+#include "game/player.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace {
-constexpr float kSkin = 0.001f;      // gap kept between player and geometry
+constexpr float kSkin = 0.001f;       // gap kept between player and geometry
 constexpr float kGroundProbe = 0.05f; // how far below the feet counts as ground
 constexpr float kKillPlaneY = -25.0f;
 } // namespace

@@ -1,8 +1,8 @@
 #pragma once
 
-// Minimal OpenGL 3.3 core loader hand-rolled on top of SDL_GL_GetProcAddress,
-// so the engine needs no external GL loader library. Only the entry points
-// and enums this engine actually uses are declared.
+// Minimal OpenGL 3.3 core loader. Entry points are resolved through a proc
+// loader supplied by the platform window (SDL_GL_GetProcAddress on desktop),
+// so this file has no platform dependency and no external loader library.
 
 #include <cstddef>
 
@@ -123,5 +123,10 @@ using GLintptr = std::ptrdiff_t;
 GL_FUNCTIONS(GL_DECLARE_FN)
 #undef GL_DECLARE_FN
 
-// Requires a current GL context. Returns false if any entry point is missing.
-bool loadGLFunctions();
+// Matches IWindow::GLProc; kept as a plain typedef so this header stays
+// dependency-free.
+using GLProcLoader = void* (*)(const char* name);
+
+// Resolves every entry point above. Requires a current GL context. Returns
+// false if any function is missing.
+bool loadGLFunctions(GLProcLoader getProc);

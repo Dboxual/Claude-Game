@@ -1,4 +1,4 @@
-#include "world.h"
+#include "game/world.h"
 
 void World::add(glm::vec3 min, glm::vec3 max, glm::vec3 color, bool checkerTop) {
     boxes_.push_back(WorldBox{AABB{min, max}, color, checkerTop});
@@ -44,8 +44,8 @@ void World::buildTestMap() {
 
     // Crouch tunnel: 2 m wide gap with a roof 1.4 m up - stand height (1.8)
     // does not fit, crouch height (1.3) does.
-    add({2, 0, 9.6f}, {8, 2.2f, 10.0f}, tunnelPurple);   // near side wall
-    add({2, 0, 12.0f}, {8, 2.2f, 12.4f}, tunnelPurple);  // far side wall
+    add({2, 0, 9.6f}, {8, 2.2f, 10.0f}, tunnelPurple);     // near side wall
+    add({2, 0, 12.0f}, {8, 2.2f, 12.4f}, tunnelPurple);    // far side wall
     add({2, 1.4f, 10.0f}, {8, 2.2f, 12.4f}, tunnelPurple); // roof
 
     // Pillars for strafe practice.

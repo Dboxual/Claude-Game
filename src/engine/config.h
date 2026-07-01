@@ -3,16 +3,16 @@
 #include <string>
 #include <unordered_map>
 
-// Flat "key = value" file. '#' starts a comment. All values are floats.
+// Flat "key = value" format. '#' starts a comment. All values are floats.
+// Deliberately parses from a string, not a file: file access goes through
+// the platform IFileSystem so the same code works on packaged platforms.
 class ConfigFile {
 public:
-    bool loadFromFile(const std::string& path);
-    bool reload();
+    void parseText(const std::string& text); // replaces current contents
     float get(const std::string& key, float fallback) const;
-    const std::string& path() const { return path_; }
+    bool empty() const { return values_.empty(); }
 
 private:
-    std::string path_;
     std::unordered_map<std::string, float> values_;
 };
 
@@ -47,7 +47,3 @@ struct MovementConfig {
 
     void applyFrom(const ConfigFile& cfg);
 };
-
-// Searches likely locations (working directory, then the exe directory) for
-// config/movement.cfg. Returns an empty string if not found.
-std::string findConfigPath(const char* exeDir);
