@@ -1,0 +1,9 @@
+{
+  "name": "tacmove",
+  "version": "0.1.0",
+  "description": "TacMove - tactical FPS movement prototype (Milestone 1)",
+  "dependencies": [
+    "sdl3",
+    "glm"
+  ]
+}
