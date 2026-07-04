@@ -1,6 +1,9 @@
 build/
 vcpkg_installed/
+config/settings.cfg
 .vs/
 .cache/
 CMakeUserPresets.json
 *.user
+codex_*.txt
+codex_*.diff

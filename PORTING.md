@@ -8,29 +8,29 @@ iOS, and approved console ports do not require touching gameplay code.
 
 | Layer | Interface | Current implementation | Where |
 |---|---|---|---|
-| Window/surface | `IWindow` | SDL3 (`SdlWindow`) | `src/platform/sdl/` |
-| Input | `IInput` → `InputState` | SDL3 keyboard+mouse (`SdlInput`) | `src/platform/sdl/` |
-| File system | `IFileSystem` | SDL3 IO (`SdlFileSystem`) | `src/platform/sdl/` |
-| Audio | `IAudio` | SDL3 device init, no sounds yet (`SdlAudio`) | `src/platform/sdl/` |
-| Renderer | `IRenderer` ← `RenderFrame` | OpenGL 3.3 (`GLRenderer`) + stubs | `src/renderer/` |
-| Build/export | CMake targets + presets | `tac_core` / `tac_game` / `tac_renderer` / `tac_platform_sdl` | `CMakeLists.txt` |
+| Window/surface | `IWindow` | SDL3 (`SdlWindow`) | `src/client/platform/sdl/` |
+| Input | `IInput` → `InputState` | SDL3 keyboard+mouse (`SdlInput`) | `src/client/platform/sdl/` |
+| File system | `IFileSystem` | SDL3 IO (`SdlFileSystem`) | `src/client/platform/sdl/` |
+| Audio | `IAudio` | SDL3 device init, no sounds yet (`SdlAudio`) | `src/client/platform/sdl/` |
+| Renderer | `IRenderer` ← `RenderFrame` | OpenGL 3.3 (`GLRenderer`) + stubs | `src/client/renderer/` |
+| Build/export | CMake targets + presets | `tac_shared` / `tac_client_game` / `tac_client_renderer` / `tac_client_platform_sdl` | `CMakeLists.txt` |
 
 The dependency rules, enforced by the static-library split (a layer that
 tries to include SDL or GL headers without being granted them fails to
 compile):
 
-- `tac_game` (gameplay) depends on **glm and the interface headers only** —
+- `tac_client_game` (gameplay) and `tac_shared` (simulation) depends on **glm and the interface headers only** —
   never SDL, never a graphics API. It consumes `InputState` and produces a
-  `RenderFrame` (pure data, `src/renderer/render_types.h`).
-- `tac_renderer` has **no SDL dependency**. The GL backend resolves its
+  `RenderFrame` (pure data, `src/client/renderer/render_types.h`).
+- `tac_client_renderer` has **no SDL dependency**. The GL backend resolves its
   function pointers through `IWindow::glProcLoader()`, handed over at init.
-- `tac_platform_sdl` is the **only** library that links SDL3.
-- `src/main.cpp` is the composition root: it picks the platform factory and
+- `tac_client_platform_sdl` is the **only** library that links SDL3.
+- `src/client/main.cpp` is the composition root: it picks the platform factory and
   renderer backend and pumps the loop. It includes no SDL/GL headers.
 
 ## Renderer backends
 
-`createRenderer(GraphicsApi)` in `src/renderer/renderer_factory.cpp` returns:
+`createRenderer(GraphicsApi)` in `src/client/renderer/renderer_factory.cpp` returns:
 
 | Backend | Status | Planned targets | Notes |
 |---|---|---|---|
@@ -47,7 +47,7 @@ smoke tests today, so the seam stays honest.
 ## Adding a platform (Android example)
 
 1. **Platform systems** — SDL3 already supports Android; most of
-   `src/platform/sdl/` carries over. `SdlFileSystem` reads via `SDL_LoadFile`,
+   `src/client/platform/sdl/` carries over. `SdlFileSystem` reads via `SDL_LoadFile`,
    which resolves APK assets on Android, which is why gameplay is not allowed
    to use `std::ifstream`.
 2. **Input** — add a touch/gamepad path inside the platform layer that fills
@@ -55,26 +55,27 @@ smoke tests today, so the seam stays honest.
    does not change.
 3. **Renderer** — implement `GlesRenderer` (or Vulkan). Everything it must
    draw arrives in `RenderFrame`; the font atlas and glyph metrics come from
-   `renderer/common/font5x7`.
+   `client/renderer/common/font5x7`.
 4. **Build/export** — add a CMake preset/toolchain for the target (NDK
    toolchain file, `arm64-android` vcpkg triplet) and a new job in
    `.github/workflows/build.yml`. The layer libraries build unchanged.
 5. **Composition root** — Android's entry point differs (`SDL_main` inside an
-   activity); the loop body in `src/main.cpp` moves into a shared function
+   activity); the loop body in `src/client/main.cpp` moves into a shared function
    when that lands. Keep `main.cpp` free of platform headers so this stays a
    mechanical change.
 
 Console ports follow the same recipe under NDA toolchains: a
 `tac_platform_<console>` library, a renderer backend for the console's
-graphics API, and a build preset. Nothing in `tac_game` should ever need to
+graphics API, and a build preset. Nothing in `tac_client_game` or `tac_shared` should ever need to
 know.
 
 ## Rules that keep the port cheap
 
-- Gameplay code may include: `engine/*`, `game/*`, `platform/{input,filesystem,window,audio,graphics_api}.h`
-  (interfaces only), `renderer/render_types.h`, and glm. Nothing else.
-- All file reads go through `IFileSystem`. No `fopen`/`ifstream` outside the
-  platform layer.
+- Gameplay code may include: `shared/*`, `client/platform/{input,filesystem,window,audio,graphics_api}.h`
+  (interfaces only), `client/renderer/render_types.h`, and glm. Nothing else.
+- Client-side file reads go through `IFileSystem`; no `fopen`/`ifstream`
+  outside the platform layer. (The dedicated server is exempt — it always
+  runs on a real OS filesystem and reads its config with plain streams.)
 - All logging goes through `eng::logInfo/logError` so a platform can redirect
   it (logcat, console SDK logging).
 - Timing uses `std::chrono::steady_clock` — portable everywhere.

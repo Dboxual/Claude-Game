@@ -90,12 +90,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/config
-          cp config/movement.cfg dist/config/
+          cp config/movement.cfg config/server.cfg dist/config/
           if [ -f build/Release/tacmove.exe ]; then
-            cp build/Release/tacmove.exe dist/
+            cp build/Release/tacmove.exe build/Release/tacmove_server.exe dist/
             cp build/Release/*.dll dist/ 2>/dev/null || true
           else
-            cp build/tacmove dist/
+            cp build/tacmove build/tacmove_server dist/
           fi
 
       - name: Upload artifact

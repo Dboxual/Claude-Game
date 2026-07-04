@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(tacmove VERSION 0.2.0 LANGUAGES CXX)
+project(tacmove VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,55 +8,67 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
-# The engine is split into one static library per layer. This is not just
-# organization: it makes the platform boundaries real. tac_game and
-# tac_renderer never receive SDL3's include paths, so gameplay or renderer
-# code that tries to #include <SDL3/...> fails to compile. Porting to a new
-# platform means adding a sibling of tac_platform_sdl, not editing the game.
+# Three top-level pieces, enforced at build level:
+#   src/shared/ -> tac_shared: simulation, config, logging. Compiled into BOTH
+#                  the client and the dedicated server. std + glm only.
+#   src/client/ -> the playable prototype (game loop/HUD/menu, platform
+#                  layer, renderer backends). The only code that sees SDL/GL.
+#   src/server/ -> tacmove_server: headless. Links tac_shared and nothing
+#                  else, so it can never grow a graphics dependency silently.
 
-# --- core: logging + config parsing (std library only) ---
-add_library(tac_core STATIC
-    src/engine/log.cpp
-    src/engine/config.cpp
+# --- shared: movement sim, collision world, config parsing, logging ---
+add_library(tac_shared STATIC
+    src/shared/log.cpp
+    src/shared/config.cpp
+    src/shared/player.cpp
+    src/shared/world.cpp
 )
-target_include_directories(tac_core PUBLIC src)
+target_include_directories(tac_shared PUBLIC src)
+target_link_libraries(tac_shared PUBLIC glm::glm)
 
-# --- gameplay: movement sim, world, HUD model (glm only, no SDL, no GL) ---
-add_library(tac_game STATIC
-    src/game/game.cpp
-    src/game/player.cpp
-    src/game/world.cpp
+# --- client game layer: sim orchestration, HUD/menu model, user settings.
+#     No SDL, no graphics API (enforced: no such include paths here). ---
+add_library(tac_client_game STATIC
+    src/client/game.cpp
+    src/client/settings.cpp
 )
-target_link_libraries(tac_game PUBLIC tac_core glm::glm)
+target_link_libraries(tac_client_game PUBLIC tac_shared)
 
-# --- renderer: IRenderer + backends. The GL backend resolves its function
-#     pointers through the window's proc loader, so no SDL here either. ---
-add_library(tac_renderer STATIC
-    src/renderer/renderer_factory.cpp
-    src/renderer/common/font5x7.cpp
-    src/renderer/opengl/gl_loader.cpp
-    src/renderer/opengl/gl_renderer.cpp
-    src/renderer/vulkan/vulkan_renderer.cpp
-    src/renderer/metal/metal_renderer.cpp
-    src/renderer/mobile/gles_renderer.cpp
+# --- client renderer: IRenderer + backends. The GL backend resolves its
+#     function pointers through the window's proc loader, so no SDL here. ---
+add_library(tac_client_renderer STATIC
+    src/client/renderer/renderer_factory.cpp
+    src/client/renderer/common/font5x7.cpp
+    src/client/renderer/opengl/gl_loader.cpp
+    src/client/renderer/opengl/gl_renderer.cpp
+    src/client/renderer/vulkan/vulkan_renderer.cpp
+    src/client/renderer/metal/metal_renderer.cpp
+    src/client/renderer/mobile/gles_renderer.cpp
 )
-target_link_libraries(tac_renderer PUBLIC tac_core glm::glm)
+target_link_libraries(tac_client_renderer PUBLIC tac_shared)
 
-# --- platform: the only code in the project allowed to touch SDL3 ---
-add_library(tac_platform_sdl STATIC
-    src/platform/sdl/sdl_platform.cpp
-    src/platform/sdl/sdl_window.cpp
-    src/platform/sdl/sdl_input.cpp
-    src/platform/sdl/sdl_filesystem.cpp
-    src/platform/sdl/sdl_audio.cpp
+# --- client platform layer: the only code in the project that touches SDL3 ---
+add_library(tac_client_platform_sdl STATIC
+    src/client/platform/sdl/sdl_platform.cpp
+    src/client/platform/sdl/sdl_window.cpp
+    src/client/platform/sdl/sdl_input.cpp
+    src/client/platform/sdl/sdl_filesystem.cpp
+    src/client/platform/sdl/sdl_audio.cpp
 )
-target_link_libraries(tac_platform_sdl PUBLIC tac_core SDL3::SDL3)
+target_link_libraries(tac_client_platform_sdl PUBLIC tac_shared SDL3::SDL3)
 
-# --- executable: the composition root ---
-add_executable(tacmove src/main.cpp)
-target_link_libraries(tacmove PRIVATE tac_game tac_renderer tac_platform_sdl)
+# --- game client ---
+add_executable(tacmove src/client/main.cpp)
+target_link_libraries(tacmove PRIVATE tac_client_game tac_client_renderer tac_client_platform_sdl)
 
-foreach(target tac_core tac_game tac_renderer tac_platform_sdl tacmove)
+# --- dedicated server: headless, command-line, tac_shared only ---
+add_executable(tacmove_server
+    src/server/main.cpp
+    src/server/dedicated_server.cpp
+)
+target_link_libraries(tacmove_server PRIVATE tac_shared)
+
+foreach(target tac_shared tac_client_game tac_client_renderer tac_client_platform_sdl tacmove tacmove_server)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
     else()
@@ -64,8 +76,8 @@ foreach(target tac_core tac_game tac_renderer tac_platform_sdl tacmove)
     endif()
 endforeach()
 
-# Ship the tunables next to the executable so the game finds them no matter
-# where it is launched from (it also checks the working directory first).
+# Ship the config directory (movement tunables + server config) next to the
+# binaries so both find it no matter where they are launched from.
 add_custom_command(TARGET tacmove POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:tacmove>/config)
