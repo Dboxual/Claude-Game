@@ -38,8 +38,9 @@ the game in seconds.
 ## Run it — Linux
 
 ```bash
-# Debian/Ubuntu system packages SDL3 needs to build:
-sudo apt-get install -y build-essential git cmake pkg-config libltdl-dev \
+# Debian/Ubuntu system packages the vcpkg dependency build needs:
+sudo apt-get install -y build-essential git cmake pkg-config \
+  autoconf autoconf-archive automake libtool libltdl-dev \
   libx11-dev libxft-dev libxrender-dev libxext-dev libxrandr-dev \
   libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev \
   libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev wayland-protocols \
