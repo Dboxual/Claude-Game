@@ -20,8 +20,10 @@ find_package(glm CONFIG REQUIRED)
 add_library(tac_shared STATIC
     src/shared/log.cpp
     src/shared/config.cpp
+    src/shared/content.cpp
     src/shared/player.cpp
     src/shared/world.cpp
+    src/shared/world_save.cpp
 )
 target_include_directories(tac_shared PUBLIC src)
 target_link_libraries(tac_shared PUBLIC glm::glm)

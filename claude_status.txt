@@ -1,0 +1,67 @@
+TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05)
+==================================================================
+
+This branch contains everything since the last push, uncommitted until now:
+macOS support, the Phase 1 sandbox shell, and the Phase 2 "spawned things
+are real" work. Written by Claude on an Apple Silicon MacBook (M2);
+CODEX_REVIEW.md has the detailed handoff, risky areas, and Phase 3 plan.
+
+DONE (built + tested on macOS arm64, client and server, zero warnings)
+----------------------------------------------------------------------
+- run_macos.sh: one-script build+run on a bare Mac (needs only git + Xcode
+  CLT; bootstraps vcpkg into ~/vcpkg, fetches its own cmake, builds vcpkg's
+  pkgconf when pkg-config is missing). README has the macOS section.
+- Worlds: Create World / Load World screens; worlds/<folder>/world.cfg
+  plain-text saves (v2: entity = <id> x y z <respawn_seconds>; v1 4-field
+  lines still load). Auto-save on every spawn and on Quit to Menu.
+- Dev spawn menu on Q with category tabs (Weapons/Bots/Props/Pickups).
+- Real interactions: solid crates/dummies block movement (this fixed an
+  actual bug - Player::slideMove ignored entities entirely); E-pickup with
+  look-at prompt; pickups respawn (10 s default) or vanish for good.
+- Weapons: fists/karambit (melee) + glock (hitscan, unlimited ammo) with
+  damage/range/cooldown in shared WeaponDef; inventory + slots 1-3; hit
+  marker, muzzle-flash/swing placeholder rects, toasts, weapon bar HUD.
+- Training dummy: 100 HP, red hit flash, aim-at health readout, respawns
+  5 s after death.
+- Placeholder visuals: multi-box "models" (glock reads as a pistol,
+  karambit as a curved claw, dummy has torso/head); pickups hover and bob.
+- Tests run locally (scratch, NOT checked in): unit tests for raycasts/
+  respawn/inventory/save-format, plus a headless integration test that
+  drives the real Game through the menus (spawn -> pickup -> shoot dummy ->
+  respawn -> melee -> crate blocking -> create/save/load world).
+
+UNFINISHED (known, deliberate cuts - not hidden)
+------------------------------------------------
+- Pickups tab in the spawn menu is an empty placeholder (no non-weapon
+  pickups exist yet).
+- No ammo/reload; glock is semi-auto unlimited by design this phase.
+- No player health; nothing damages the player yet.
+- Spawn placement is naive (2.5 m ahead at foot height): you can embed a
+  crate in a wall or spawn it overlapping yourself.
+- Pickup interaction ray is only occluded by static geometry - you can
+  grab a pickup through a crate/dummy.
+- Melee is a single center ray (no swing arc); dummy is one AABB (no head
+  hitbox; the visual head is cosmetic).
+- Load World screen caps at 7 worlds, no scrolling, no delete/rename.
+- Content (weapons/entities) is still hard-coded in src/shared/content.cpp;
+  the registry/string-id design is the seam for data-driven files later.
+- worlds/ is gitignored (runtime user data), so no sample world ships in
+  the repo; create one in-game or see README for the file format.
+- Renderer is the existing OpenGL 3.3 backend; Vulkan/Metal/GLES remain
+  compiling stubs. No textures - visuals are colored boxes on purpose.
+
+BROKEN / WATCH OUT
+------------------
+- Nothing known-broken at commit time: client + server build clean and all
+  local tests pass. Two sharp edges for reviewers:
+  1) World entity indices are positional; damageEntity/consumePickup can
+     erase from the vector and invalidate indices (Game re-resolves its
+     cached aim hits each frame - do not hold indices across frames).
+  2) Attack cooldowns/toasts tick per frame while respawns tick on the
+     fixed 128 Hz sim; fine offline, needs a decision before networking.
+
+BUILD / RUN
+-----------
+  macOS:   ./run_macos.sh            (smoke: --frames 120 --world --novsync)
+  Linux:   ./run_linux.sh            Windows: run_windows.bat
+  Server:  ./build/tacmove_server --ticks 384

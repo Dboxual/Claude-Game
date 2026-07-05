@@ -2,6 +2,7 @@
 
 #include "shared/log.h"
 #include "shared/protocol.h"
+#include "shared/world_save.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -21,18 +22,55 @@ constexpr float kAddressBoxW = 460.0f;
 constexpr float kAddressBoxH = 44.0f;
 constexpr size_t kAddressMaxLen = 32;
 
+// Sandbox limits (Phase 1).
+constexpr size_t kWorldNameMaxLen = 24;
+constexpr int kMaxWorldButtons = 7;      // load screen shows at most this many
+constexpr size_t kMaxEntities = 256;     // keeps save files and draw lists sane
+constexpr float kSpawnDistance = 2.5f;   // meters in front of the player
+
+// Interaction (Phase 2).
+constexpr float kInteractRange = 2.5f; // max distance for E-pickup
+constexpr float kAimInfoRange = 12.0f; // max distance for the target readout
+
 bool contains(float px, float py, float x, float y, float w, float h) {
     return px >= x && px < x + w && py >= y && py < y + h;
+}
+
+std::string toUpperAscii(std::string s) {
+    for (char& c : s) {
+        if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
+    }
+    return s;
+}
+
+// Display name -> folder name: lowercase, spaces to underscores, everything
+// but [a-z0-9_-] dropped. Empty result means the name was unusable.
+std::string sanitizeWorldFolder(const std::string& name) {
+    std::string out;
+    for (char c : name) {
+        if (c >= 'A' && c <= 'Z') out += char(c - 'A' + 'a');
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') out += c;
+        else if (c == ' ' && !out.empty() && out.back() != '_') out += '_';
+    }
+    while (!out.empty() && out.back() == '_') out.pop_back();
+    if (out.size() > kWorldNameMaxLen) out.resize(kWorldNameMaxLen);
+    return out;
 }
 
 } // namespace
 
 bool Game::init(IFileSystem& fs) {
     fs_ = &fs;
+    content_.registerBuiltins();
 
     const std::string relative = "config/movement.cfg";
     if (fs.exists(relative)) cfgPath_ = relative;
     else if (fs.exists(fs.basePath() + relative)) cfgPath_ = fs.basePath() + relative;
+
+    // Worlds live next to wherever the config directory was found: the repo
+    // root when launched from there, otherwise beside the executable.
+    worldsRoot_ = "worlds/";
+    if (!cfgPath_.empty() && cfgPath_ != relative) worldsRoot_ = fs.basePath() + "worlds/";
 
     // Settings live next to the movement config; created on first save.
     if (!cfgPath_.empty()) {
@@ -91,7 +129,7 @@ void Game::saveSettings() {
     }
 }
 
-void Game::startTestWorld() {
+void Game::beginSession() {
     player_.respawn(world_.spawnPoint);
     prevPos_ = player_.pos;
     yaw_ = 0.0f;
@@ -99,9 +137,222 @@ void Game::startTestWorld() {
     eyeHeight_ = cfg_.standHeight - cfg_.eyeOffset;
     accumulator_ = 0.0;
     jumpBufferTimer_ = -1.0;
+    inventory_.reset("fists");
+    attackCooldown_ = 0.0f;
+    swingTimer_ = muzzleFlashTimer_ = hitMarkerTimer_ = 0.0f;
+    hudToast_.clear();
+    hudToastTimer_ = 0.0;
+    aimPickup_ = {};
+    aimInfo_ = {};
     inGame_ = true;
     ui_ = UiScreen::None;
     menuStatus_.clear();
+}
+
+void Game::startTestWorld() {
+    world_.buildTestMap();
+    currentWorldFile_.clear(); // the test arena is never saved
+    currentWorldName_ = "TEST ARENA";
+    beginSession();
+}
+
+void Game::createWorld() {
+    std::string folder = sanitizeWorldFolder(worldNameInput_);
+    if (folder.empty()) {
+        menuStatus_ = "ENTER A WORLD NAME (LETTERS, NUMBERS, SPACES)";
+        return;
+    }
+    std::string dir = worldsRoot_ + folder;
+    std::string file = dir + "/world.cfg";
+    if (fs_->exists(file)) {
+        menuStatus_ = "A WORLD WITH THAT NAME ALREADY EXISTS";
+        return;
+    }
+    if (!fs_->createDirectory(dir)) {
+        eng::logError("Failed to create world directory: %s", dir.c_str());
+        menuStatus_ = "COULD NOT CREATE THE WORLD FOLDER";
+        return;
+    }
+
+    world_.buildFlatMap();
+    currentWorldName_ = worldNameInput_;
+    currentWorldFile_ = file;
+    saveCurrentWorld();
+    eng::logInfo("Created world '%s' at %s", currentWorldName_.c_str(), file.c_str());
+    beginSession();
+}
+
+void Game::loadWorld(int listIndex) {
+    if (listIndex < 0 || listIndex >= int(worldList_.size())) return;
+    const WorldListEntry& entry = worldList_[size_t(listIndex)];
+    std::string file = worldsRoot_ + entry.folder + "/world.cfg";
+
+    auto text = fs_->readTextFile(file);
+    if (!text) {
+        menuStatus_ = "FAILED TO READ " + toUpperAscii(entry.folder);
+        return;
+    }
+    WorldSaveData data;
+    if (!parseWorldSave(*text, data)) {
+        menuStatus_ = "WORLD FILE IS INVALID: " + toUpperAscii(entry.folder);
+        return;
+    }
+
+    world_.buildFlatMap();
+    int skipped = 0;
+    for (const WorldSaveData::Spawn& s : data.entities) {
+        if (const EntityDef* def = content_.find(s.defId)) {
+            world_.addEntity(*def, s.pos, s.respawnSeconds);
+        } else {
+            ++skipped; // content from a newer build/pack: keep the file intact
+        }
+    }
+    if (skipped > 0) {
+        eng::logError("World '%s': %d entities reference unknown content, skipped",
+                      entry.folder.c_str(), skipped);
+    }
+
+    currentWorldName_ = data.displayName.empty() ? entry.folder : data.displayName;
+    currentWorldFile_ = file;
+    eng::logInfo("Loaded world '%s' (%d entities)", currentWorldName_.c_str(),
+                 int(world_.entities().size()));
+    beginSession();
+}
+
+void Game::saveCurrentWorld() {
+    if (currentWorldFile_.empty()) return; // test arena
+    WorldSaveData data;
+    data.displayName = currentWorldName_;
+    data.entities.reserve(world_.entities().size());
+    for (const WorldEntity& e : world_.entities()) {
+        // Inactive entities (picked up / destroyed, awaiting respawn) keep
+        // their spawn point in the file; consumed-for-good ones are already
+        // erased from the vector.
+        data.entities.push_back({e.defId, e.pos, e.respawnSeconds});
+    }
+    if (!fs_->writeTextFile(currentWorldFile_, serializeWorldSave(data))) {
+        eng::logError("Failed to save world to %s", currentWorldFile_.c_str());
+    }
+}
+
+void Game::refreshWorldList() {
+    worldList_.clear();
+    for (const std::string& name : fs_->listDirectory(worldsRoot_)) {
+        std::string file = worldsRoot_ + name + "/world.cfg";
+        if (!fs_->exists(file)) continue; // not a world folder
+        WorldListEntry entry{name, name};
+        if (auto text = fs_->readTextFile(file)) {
+            WorldSaveData data;
+            if (parseWorldSave(*text, data) && !data.displayName.empty()) {
+                entry.displayName = data.displayName;
+            }
+        }
+        worldList_.push_back(std::move(entry));
+    }
+    std::sort(worldList_.begin(), worldList_.end(),
+              [](const WorldListEntry& a, const WorldListEntry& b) {
+                  return a.displayName < b.displayName;
+              });
+}
+
+std::vector<const EntityDef*> Game::spawnableDefs(ContentCategory category) const {
+    std::vector<const EntityDef*> out;
+    for (const EntityDef& def : content_.defs()) {
+        if (def.spawnable && def.category == category) out.push_back(&def);
+    }
+    return out;
+}
+
+void Game::spawnFromMenu(int spawnableIndex) {
+    std::vector<const EntityDef*> defs = spawnableDefs(ContentCategory(spawnCategory_));
+    if (spawnableIndex < 0 || spawnableIndex >= int(defs.size())) return;
+    if (world_.entities().size() >= kMaxEntities) {
+        menuStatus_ = "ENTITY LIMIT REACHED";
+        return;
+    }
+    const EntityDef& def = *defs[size_t(spawnableIndex)];
+
+    glm::vec3 forward(std::sin(yaw_), 0.0f, -std::cos(yaw_));
+    glm::vec3 pos = player_.pos + forward * kSpawnDistance;
+    world_.addEntity(def, pos);
+    saveCurrentWorld(); // persistent worlds save on every change
+
+    menuStatus_ = "SPAWNED " + toUpperAscii(def.displayName);
+    if (currentWorldFile_.empty()) menuStatus_ += " - TEST ARENA IS NOT SAVED";
+}
+
+glm::vec3 Game::eyePosition() const {
+    return player_.pos + glm::vec3(0.0f, eyeHeight_, 0.0f);
+}
+
+glm::vec3 Game::lookDirection() const {
+    return glm::vec3(std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_),
+                     -std::cos(yaw_) * std::cos(pitch_));
+}
+
+void Game::updateAimTarget() {
+    const glm::vec3 eye = eyePosition();
+    const glm::vec3 dir = lookDirection();
+
+    // Walls occlude both the pickup prompt and the target-info readout.
+    float geoT = world_.raycastGeometry(eye, dir, kAimInfoRange);
+    aimPickup_ = world_.raycastEntities(eye, dir, std::min(geoT, kInteractRange),
+                                        World::RayMask::Pickups);
+    aimInfo_ = world_.raycastEntities(eye, dir, geoT, World::RayMask::AttackTargets);
+    if (aimInfo_.index >= 0 &&
+        world_.entities()[size_t(aimInfo_.index)].maxHealth <= 0.0f) {
+        aimInfo_ = {}; // only damageable entities get the info readout
+    }
+}
+
+void Game::tryInteract() {
+    if (aimPickup_.index < 0) return;
+    const WorldEntity& e = world_.entities()[size_t(aimPickup_.index)];
+    std::string weaponId = e.weaponId;
+    world_.consumePickup(aimPickup_.index);
+    aimPickup_ = {};
+    aimInfo_ = {}; // indices may have shifted; refreshed next frame
+
+    const WeaponDef* weapon = content_.findWeapon(weaponId);
+    const char* name = weapon ? weapon->displayName.c_str() : weaponId.c_str();
+    bool newlyAcquired = inventory_.acquireAndEquip(weaponId);
+    showToast(std::string(newlyAcquired ? "PICKED UP " : "EQUIPPED ") + toUpperAscii(name));
+    eng::logInfo("Picked up weapon '%s'", weaponId.c_str());
+}
+
+void Game::tryAttack() {
+    if (attackCooldown_ > 0.0f) return;
+    const WeaponDef* weapon = content_.findWeapon(inventory_.equippedId());
+    if (!weapon) return;
+
+    attackCooldown_ = weapon->cooldownSeconds;
+    if (weapon->kind == WeaponKind::Hitscan) muzzleFlashTimer_ = 0.07f;
+    else swingTimer_ = 0.18f;
+
+    const glm::vec3 eye = eyePosition();
+    const glm::vec3 dir = lookDirection();
+    float geoT = world_.raycastGeometry(eye, dir, weapon->range);
+    World::EntityHit hit =
+        world_.raycastEntities(eye, dir, geoT, World::RayMask::AttackTargets);
+    if (hit.index < 0) return;
+
+    const WorldEntity& target = world_.entities()[size_t(hit.index)];
+    if (target.maxHealth <= 0.0f) return; // solid but not damageable (crates)
+
+    std::string targetId = target.defId;
+    hitMarkerTimer_ = 0.12f;
+    bool destroyed = world_.damageEntity(hit.index, weapon->damage);
+    aimPickup_ = {};
+    aimInfo_ = {}; // entity vector may have shifted; refreshed next frame
+    if (destroyed) {
+        const EntityDef* def = content_.find(targetId);
+        showToast(toUpperAscii(def ? def->displayName : targetId) + " DESTROYED");
+    }
+}
+
+void Game::showToast(std::string text) {
+    hudToast_ = std::move(text);
+    hudToastTimer_ = 1.6;
 }
 
 void Game::update(const InputState& in, double frameDt, int viewportW, int viewportH) {
@@ -125,8 +376,29 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
             menuStatus_.clear();
             ui_ = UiScreen::MainMenu;
             break;
+        case UiScreen::CreateWorld:
+        case UiScreen::LoadWorld: // back to the singleplayer screen
+            menuStatus_.clear();
+            ui_ = UiScreen::Singleplayer;
+            break;
+        case UiScreen::SpawnMenu: // close, back to gameplay
+            menuStatus_.clear();
+            ui_ = UiScreen::None;
+            break;
         case UiScreen::MainMenu:
             break;
+        }
+    }
+
+    // Q toggles the dev spawn menu, but only in a gameplay context (never
+    // while typing in a text field or sitting in the pause/main menus).
+    if (in.spawnMenuPressed && inGame_) {
+        if (ui_ == UiScreen::None) {
+            menuStatus_.clear();
+            ui_ = UiScreen::SpawnMenu;
+        } else if (ui_ == UiScreen::SpawnMenu) {
+            menuStatus_.clear();
+            ui_ = UiScreen::None;
         }
     }
 
@@ -153,6 +425,18 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
             if (in.enterPressed) activateButton(UiButton::Id::Connect);
         }
 
+        // World-name entry on the create screen; the folder name is derived
+        // from this on create, so only sensible characters get in.
+        if (ui_ == UiScreen::CreateWorld) {
+            for (char c : in.typedText) {
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') || c == ' ' || c == '-' || c == '_';
+                if (ok && worldNameInput_.size() < kWorldNameMaxLen) worldNameInput_ += c;
+            }
+            if (in.backspacePressed && !worldNameInput_.empty()) worldNameInput_.pop_back();
+            if (in.enterPressed) activateButton(UiButton::Id::ConfirmCreateWorld);
+        }
+
         // Hover + click handling against this frame's layout.
         std::vector<UiButton> buttons = buildMenuLayout(viewportW, viewportH);
         hoveredButton_ = -1;
@@ -165,7 +449,8 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
             }
         }
         if (in.mouseClicked && hoveredButton_ >= 0) {
-            activateButton(buttons[size_t(hoveredButton_)].id);
+            activateButton(buttons[size_t(hoveredButton_)].id,
+                           buttons[size_t(hoveredButton_)].payload);
         }
         return; // the simulation is frozen while any UI is up
     }
@@ -193,6 +478,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
         pin.jump = jumpBufferTimer_ > 0.0 || (cfg_.autoBhop != 0.0f && in.jumpHeld);
         prevPos_ = player_.pos;
         player_.tick(pin, world_, cfg_, float(tickDt_));
+        world_.tick(float(tickDt_)); // entity respawns + hit-flash decay
         if (player_.justJumped) jumpBufferTimer_ = -1.0;
         jumpBufferTimer_ -= tickDt_;
         accumulator_ -= tickDt_;
@@ -201,9 +487,21 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
 
     float targetEye = player_.height(cfg_) - cfg_.eyeOffset;
     eyeHeight_ += (targetEye - eyeHeight_) * std::min(1.0f, cfg_.crouchTransitionSpeed * float(frameDt));
+
+    // Combat and interaction (per frame, like mouse look, for minimal latency).
+    attackCooldown_ = std::max(0.0f, attackCooldown_ - float(frameDt));
+    swingTimer_ = std::max(0.0f, swingTimer_ - float(frameDt));
+    muzzleFlashTimer_ = std::max(0.0f, muzzleFlashTimer_ - float(frameDt));
+    hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - float(frameDt));
+    if (hudToastTimer_ > 0.0) hudToastTimer_ -= frameDt;
+
+    updateAimTarget();
+    if (in.slotPressed > 0) inventory_.selectSlot(in.slotPressed - 1);
+    if (in.interactPressed) tryInteract();
+    if (in.attackPressed) tryAttack();
 }
 
-void Game::activateButton(UiButton::Id id) {
+void Game::activateButton(UiButton::Id id, int payload) {
     using Id = UiButton::Id;
     bool settingsChanged = false;
     switch (id) {
@@ -212,12 +510,26 @@ void Game::activateButton(UiButton::Id id) {
     case Id::OpenMultiplayer: ui_ = UiScreen::Multiplayer; menuStatus_.clear(); break;
     case Id::OpenSettings: settingsReturn_ = ui_; ui_ = UiScreen::Settings; break;
     case Id::BackToMain: ui_ = UiScreen::MainMenu; menuStatus_.clear(); break;
+    case Id::BackToSingleplayer: ui_ = UiScreen::Singleplayer; menuStatus_.clear(); break;
     case Id::Back: saveSettings(); ui_ = settingsReturn_; break;
     case Id::QuitApp: quitRequested_ = true; break;
 
     // Singleplayer.
     case Id::StartTestWorld: startTestWorld(); break;
-    case Id::CreateWorldSoon: break; // disabled
+    case Id::OpenCreateWorld:
+        worldNameInput_.clear();
+        menuStatus_.clear();
+        ui_ = UiScreen::CreateWorld;
+        break;
+    case Id::OpenLoadWorld:
+        refreshWorldList();
+        menuStatus_ = worldList_.empty() ? "NO WORLDS YET - CREATE ONE FIRST" : "";
+        ui_ = UiScreen::LoadWorld;
+        break;
+
+    // Create/load world screens.
+    case Id::ConfirmCreateWorld: createWorld(); break;
+    case Id::LoadWorldEntry: loadWorld(payload); break;
 
     // Multiplayer (networking is a later milestone; protocol.h reserves v1).
     case Id::Connect:
@@ -229,7 +541,21 @@ void Game::activateButton(UiButton::Id id) {
 
     // Pause menu.
     case Id::Resume: ui_ = UiScreen::None; break;
-    case Id::QuitToMenu: inGame_ = false; ui_ = UiScreen::MainMenu; menuStatus_.clear(); break;
+    case Id::QuitToMenu:
+        saveCurrentWorld();
+        currentWorldFile_.clear();
+        inGame_ = false;
+        ui_ = UiScreen::MainMenu;
+        menuStatus_.clear();
+        break;
+
+    // Dev spawn menu.
+    case Id::SelectSpawnCategory:
+        spawnCategory_ = payload;
+        menuStatus_.clear();
+        break;
+    case Id::SpawnEntity: spawnFromMenu(payload); break;
+    case Id::CloseSpawnMenu: menuStatus_.clear(); ui_ = UiScreen::None; break;
 
     // Settings.
     case Id::ResetDefaults: settings_ = GameSettings{}; settingsChanged = true; break;
@@ -284,10 +610,58 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
     case UiScreen::Singleplayer:
         column(viewportH * 0.38f, {
             {Id::StartTestWorld, 0, 0, 0, 0, "START TEST WORLD", true},
-            {Id::CreateWorldSoon, 0, 0, 0, 0, "CREATE WORLD (COMING SOON)", false},
+            {Id::OpenCreateWorld, 0, 0, 0, 0, "CREATE WORLD", true},
+            {Id::OpenLoadWorld, 0, 0, 0, 0, "LOAD WORLD", true},
             {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
         });
         break;
+
+    case UiScreen::CreateWorld:
+        column(viewportH * 0.42f, {
+            {Id::ConfirmCreateWorld, 0, 0, 0, 0, "CREATE", true},
+            {Id::BackToSingleplayer, 0, 0, 0, 0, "BACK", true},
+        });
+        break;
+
+    case UiScreen::LoadWorld: {
+        float y = viewportH * 0.30f;
+        int shown = std::min(int(worldList_.size()), kMaxWorldButtons);
+        for (int i = 0; i < shown; ++i) {
+            buttons.push_back({Id::LoadWorldEntry, cx - kBtnW / 2, y, kBtnW, kBtnH,
+                               toUpperAscii(worldList_[size_t(i)].displayName), true, i});
+            y += kBtnGap;
+        }
+        y += 18.0f;
+        buttons.push_back({Id::BackToSingleplayer, cx - kBtnW / 2, y, kBtnW, kBtnH,
+                           "BACK", true});
+        break;
+    }
+
+    case UiScreen::SpawnMenu: {
+        // GMod-style: a row of category tabs, entries of the open tab below.
+        static const char* kTabNames[] = {"WEAPONS", "BOTS", "PROPS", "PICKUPS"};
+        constexpr int kTabCount = 4;
+        const float tabW = 150.0f, tabH = 40.0f, tabGap = 10.0f;
+        float tabX = cx - (kTabCount * tabW + (kTabCount - 1) * tabGap) / 2;
+        const float tabY = viewportH * 0.26f;
+        for (int i = 0; i < kTabCount; ++i) {
+            buttons.push_back({Id::SelectSpawnCategory, tabX, tabY, tabW, tabH,
+                               kTabNames[i], true, i, i == spawnCategory_});
+            tabX += tabW + tabGap;
+        }
+
+        std::vector<const EntityDef*> defs = spawnableDefs(ContentCategory(spawnCategory_));
+        float y = tabY + tabH + 26.0f;
+        for (int i = 0; i < int(defs.size()); ++i) {
+            buttons.push_back({Id::SpawnEntity, cx - kBtnW / 2, y, kBtnW, kBtnH,
+                               toUpperAscii(defs[size_t(i)]->displayName), true, i});
+            y += kBtnGap;
+        }
+        y += 18.0f;
+        buttons.push_back({Id::CloseSpawnMenu, cx - kBtnW / 2, y, kBtnW, kBtnH,
+                           "CLOSE", true});
+        break;
+    }
 
     case UiScreen::Multiplayer:
         column(viewportH * 0.40f, {
@@ -368,7 +742,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
     frame.proj = glm::perspective(glm::radians(settings_.fovDegrees), aspect, 0.05f, 300.0f);
 
     // World geometry.
-    frame.boxes.reserve(world_.boxes().size());
+    frame.boxes.reserve(world_.boxes().size() + world_.entities().size());
     for (const WorldBox& wb : world_.boxes()) {
         BoxDraw draw;
         draw.center = (wb.box.min + wb.box.max) * 0.5f;
@@ -376,6 +750,38 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         draw.color = wb.color;
         draw.checkerTop = wb.checkerTop;
         frame.boxes.push_back(draw);
+    }
+
+    // Spawned sandbox entities (pickups, bots, props). Multi-part visuals
+    // come from the content def; collision stays the plain entity AABB.
+    for (size_t ei = 0; ei < world_.entities().size(); ++ei) {
+        const WorldEntity& e = world_.entities()[ei];
+        if (!e.active) continue; // picked up / destroyed, awaiting respawn
+
+        glm::vec3 base = e.pos;
+        if (!e.weaponId.empty()) {
+            // Weapon pickups hover and bob slightly so they read as items.
+            base.y += 0.06f + 0.04f * float(std::sin(menuTime_ * 2.5 + double(ei) * 1.7));
+        }
+        float flash = glm::clamp(e.hitFlash / 0.15f, 0.0f, 1.0f);
+
+        const EntityDef* def = content_.find(e.defId);
+        if (def && !def->visual.empty()) {
+            for (const VisualPart& part : def->visual) {
+                BoxDraw draw;
+                draw.center = base + part.offset;
+                draw.size = part.size;
+                draw.color = glm::mix(part.color, glm::vec3(1.0f, 0.15f, 0.1f), flash);
+                frame.boxes.push_back(draw);
+            }
+        } else {
+            AABB b = e.bounds();
+            BoxDraw draw;
+            draw.center = (b.min + b.max) * 0.5f + (base - e.pos);
+            draw.size = b.max - b.min;
+            draw.color = glm::mix(e.color, glm::vec3(1.0f, 0.15f, 0.1f), flash);
+            frame.boxes.push_back(draw);
+        }
     }
 
     if (uiActive()) {
@@ -429,8 +835,13 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         std::snprintf(buf, sizeof(buf), "FPS %5.0f   TICK %d HZ   RENDERER %s",
                       fpsSmoothed_, int(cfg_.tickRate), rendererName_.c_str());
         addLine(dim, buf);
+        std::snprintf(buf, sizeof(buf), "WORLD %s%s   ENTITIES %d",
+                      toUpperAscii(currentWorldName_).c_str(),
+                      currentWorldFile_.empty() ? " (NOT SAVED)" : "",
+                      int(world_.entities().size()));
+        addLine(dim, buf);
         addLine(glm::vec4(0.7f, 0.75f, 0.8f, 1.0f),
-                "ESC PAUSE  F5 RELOAD CFG  F1 HUD  SHIFT WALK  CTRL CROUCH");
+                "ESC PAUSE  Q SPAWN  E PICK UP  LMB ATTACK  1-3 WEAPONS  F5 CFG  F1 HUD");
 
         // Big speedometer under the crosshair; green when above run speed
         // (i.e. you gained speed through air-strafing).
@@ -454,6 +865,80 @@ void Game::appendHudDraws(RenderFrame& frame) const {
     crosshair.color = glm::vec4(1.0f, 1.0f, 1.0f, 0.9f);
     crosshair.text = "+";
     frame.texts.push_back(std::move(crosshair));
+
+    const float cx = viewportW * 0.5f;
+    auto centeredLine = [&](float y, float scale, const glm::vec4& color, std::string text) {
+        TextDraw t;
+        t.centered = true;
+        t.x = cx;
+        t.y = y;
+        t.scale = scale;
+        t.color = color;
+        t.text = std::move(text);
+        frame.texts.push_back(std::move(t));
+    };
+
+    // Hit marker: four small squares around the crosshair while a hit
+    // confirmation is live.
+    if (hitMarkerTimer_ > 0.0f) {
+        const glm::vec4 red(1.0f, 0.25f, 0.2f, 0.95f);
+        const float chY = viewportH * 0.5f;
+        for (float sx : {-1.0f, 1.0f}) {
+            for (float sy : {-1.0f, 1.0f}) {
+                frame.rects.push_back({cx + sx * 13.0f - 2.5f, chY + sy * 13.0f - 2.5f,
+                                       5.0f, 5.0f, red});
+            }
+        }
+    }
+
+    // Placeholder attack feedback near the "hands": a muzzle flash for the
+    // pistol, a rising slash block for melee. Real viewmodels are cosmetic
+    // work for a later phase.
+    if (muzzleFlashTimer_ > 0.0f) {
+        frame.rects.push_back({cx + 48.0f, viewportH - 170.0f, 30.0f, 30.0f,
+                               glm::vec4(1.0f, 0.85f, 0.3f, 0.9f)});
+        frame.rects.push_back({cx + 56.0f, viewportH - 162.0f, 14.0f, 14.0f,
+                               glm::vec4(1.0f, 1.0f, 0.8f, 0.95f)});
+    }
+    if (swingTimer_ > 0.0f) {
+        float lift = (0.18f - swingTimer_) / 0.18f * 90.0f;
+        frame.rects.push_back({cx + 60.0f, viewportH - 120.0f - lift, 46.0f, 12.0f,
+                               glm::vec4(0.85f, 0.88f, 0.92f, 0.85f)});
+    }
+
+    // Interaction prompt / target readout under the crosshair.
+    char info[128];
+    if (aimPickup_.index >= 0) {
+        const WorldEntity& e = world_.entities()[size_t(aimPickup_.index)];
+        const WeaponDef* w = content_.findWeapon(e.weaponId);
+        std::snprintf(info, sizeof(info), "PRESS E TO PICK UP %s",
+                      toUpperAscii(w ? w->displayName : e.weaponId).c_str());
+        centeredLine(viewportH * 0.5f + 34.0f, 2.0f, glm::vec4(1.0f, 0.9f, 0.5f, 1.0f), info);
+    } else if (aimInfo_.index >= 0) {
+        const WorldEntity& e = world_.entities()[size_t(aimInfo_.index)];
+        const EntityDef* def = content_.find(e.defId);
+        std::snprintf(info, sizeof(info), "%s  %d/%d",
+                      toUpperAscii(def ? def->displayName : e.defId).c_str(),
+                      int(std::ceil(e.health)), int(e.maxHealth));
+        centeredLine(viewportH * 0.5f + 34.0f, 2.0f, dim, info);
+    }
+
+    // Transient gameplay message (pickups, kills).
+    if (hudToastTimer_ > 0.0 && !hudToast_.empty()) {
+        centeredLine(viewportH * 0.5f + 60.0f, 2.0f, glm::vec4(0.6f, 1.0f, 0.65f, 1.0f),
+                     hudToast_);
+    }
+
+    // Weapon bar: owned weapons with the equipped one bracketed.
+    std::string bar;
+    for (size_t i = 0; i < inventory_.weapons.size(); ++i) {
+        const WeaponDef* w = content_.findWeapon(inventory_.weapons[i]);
+        std::string name = toUpperAscii(w ? w->displayName : inventory_.weapons[i]);
+        bool eq = int(i) == inventory_.equipped;
+        if (!bar.empty()) bar += "   ";
+        bar += (eq ? "[" : "") + std::to_string(i + 1) + " " + name + (eq ? "]" : "");
+    }
+    centeredLine(viewportH - 46.0f, 2.0f, white, bar);
 }
 
 void Game::appendMenuDraws(RenderFrame& frame) const {
@@ -487,13 +972,28 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
     case UiScreen::MainMenu:
         centeredText(cx, viewportH * 0.16f, 6.0f, white, "TACMOVE");
         centeredText(cx, viewportH * 0.16f + 52.0f, 2.0f, dimText,
-                     "MOVEMENT PROTOTYPE - FOUNDATION BUILD");
+                     "EARLY SANDBOX FOUNDATION - PHASE 1");
         std::snprintf(buf, sizeof(buf), "PROTOCOL V%d - NETWORKING NOT IMPLEMENTED YET",
                       net::kProtocolVersion);
         centeredText(cx, viewportH - 34.0f, 2.0f, dimText, buf);
         break;
     case UiScreen::Singleplayer:
         centeredText(cx, viewportH * 0.24f, 4.0f, white, "SINGLEPLAYER");
+        break;
+    case UiScreen::CreateWorld:
+        centeredText(cx, viewportH * 0.16f, 4.0f, white, "CREATE WORLD");
+        break;
+    case UiScreen::LoadWorld:
+        centeredText(cx, viewportH * 0.18f, 4.0f, white, "LOAD WORLD");
+        break;
+    case UiScreen::SpawnMenu:
+        centeredText(cx, viewportH * 0.14f, 4.0f, white, "SPAWN MENU");
+        centeredText(cx, viewportH * 0.14f + 42.0f, 2.0f, dimText,
+                     "DEV / ADMIN - Q OR ESC CLOSES");
+        if (spawnableDefs(ContentCategory(spawnCategory_)).empty()) {
+            centeredText(cx, viewportH * 0.45f, 2.0f, dimText,
+                         "NOTHING IN THIS CATEGORY YET");
+        }
         break;
     case UiScreen::Multiplayer:
         centeredText(cx, viewportH * 0.13f, 4.0f, white, "MULTIPLAYER");
@@ -506,6 +1006,33 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         break;
     case UiScreen::None:
         break;
+    }
+
+    // Create World: world-name input box (always focused on this screen).
+    if (ui_ == UiScreen::CreateWorld) {
+        float boxX = cx - kAddressBoxW / 2;
+        float boxY = viewportH * 0.28f;
+        centeredText(cx, boxY - 26.0f, 2.0f, label, "WORLD NAME");
+        frame.rects.push_back({boxX, boxY, kAddressBoxW, kAddressBoxH,
+                               glm::vec4(0.10f, 0.12f, 0.16f, 0.95f)});
+        frame.rects.push_back({boxX, boxY + kAddressBoxH - 3.0f, kAddressBoxW, 3.0f,
+                               glm::vec4(0.45f, 0.55f, 0.70f, 1.0f)});
+        std::string shown = worldNameInput_;
+        if (std::fmod(menuTime_, 1.0) < 0.55) shown += "_";
+        TextDraw nameText;
+        nameText.x = boxX + 12.0f;
+        nameText.y = boxY + (kAddressBoxH - 14.0f) / 2;
+        nameText.scale = 2.0f;
+        nameText.color = white;
+        nameText.text = std::move(shown);
+        frame.texts.push_back(std::move(nameText));
+    }
+
+    // Status line for the sandbox screens (create/load feedback, spawn info).
+    if (!menuStatus_.empty() &&
+        (ui_ == UiScreen::CreateWorld || ui_ == UiScreen::LoadWorld ||
+         ui_ == UiScreen::SpawnMenu)) {
+        centeredText(cx, viewportH * 0.88f, 2.0f, notice, menuStatus_);
     }
 
     // Multiplayer: server-address input box (always focused on this screen).
@@ -537,9 +1064,10 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
     for (size_t i = 0; i < buttons.size(); ++i) {
         const UiButton& b = buttons[i];
         bool hovered = int(i) == hoveredButton_;
-        glm::vec4 fill = !b.enabled ? glm::vec4(0.13f, 0.15f, 0.19f, 0.85f)
-                       : hovered    ? glm::vec4(0.36f, 0.46f, 0.60f, 0.95f)
-                                    : glm::vec4(0.18f, 0.22f, 0.30f, 0.92f);
+        glm::vec4 fill = !b.enabled    ? glm::vec4(0.13f, 0.15f, 0.19f, 0.85f)
+                       : hovered       ? glm::vec4(0.36f, 0.46f, 0.60f, 0.95f)
+                       : b.highlighted ? glm::vec4(0.28f, 0.42f, 0.38f, 0.95f)
+                                       : glm::vec4(0.18f, 0.22f, 0.30f, 0.92f);
         frame.rects.push_back({b.x, b.y, b.w, b.h, fill});
 
         TextDraw t;

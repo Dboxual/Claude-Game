@@ -18,6 +18,10 @@ struct InputState {
     bool escapePressed = false;
     bool reloadConfigPressed = false;
     bool toggleHudPressed = false;
+    bool spawnMenuPressed = false; // Q toggles the dev spawn menu in-game
+    bool interactPressed = false;  // E: pick up / use what the player looks at
+    bool attackPressed = false;    // left mouse edge (gameplay attack)
+    int slotPressed = 0;           // 1..9 when a weapon-slot key was pressed, else 0
     bool mouseClicked = false;
     bool enterPressed = false;
     bool backspacePressed = false; // key-repeat counts, for held-delete in text fields

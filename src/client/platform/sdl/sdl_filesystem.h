@@ -10,5 +10,7 @@ public:
     std::optional<std::string> readTextFile(const std::string& path) const override;
     bool writeTextFile(const std::string& path, const std::string& text) const override;
     bool exists(const std::string& path) const override;
+    bool createDirectory(const std::string& path) const override;
+    std::vector<std::string> listDirectory(const std::string& path) const override;
     std::string basePath() const override;
 };

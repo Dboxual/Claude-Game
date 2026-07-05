@@ -1,6 +1,7 @@
 build/
 vcpkg_installed/
 config/settings.cfg
+worlds/
 .vs/
 .cache/
 CMakeUserPresets.json

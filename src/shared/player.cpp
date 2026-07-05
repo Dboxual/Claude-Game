@@ -113,25 +113,31 @@ void Player::tick(const PlayerInput& in, const World& world, const MovementConfi
     if (pos.y < kKillPlaneY) respawn(world.spawnPoint);
 }
 
-// Axis-separated move-and-clamp against every world box. Horizontal axes go
-// first so you slide along walls; Y last so you land cleanly on top of boxes
-// you moved over this tick.
+// Axis-separated move-and-clamp against every world box and every solid
+// entity (crates, dummies). Horizontal axes go first so you slide along
+// walls; Y last so you land cleanly on top of boxes you moved over this tick.
 void Player::slideMove(const World& world, const glm::vec3& delta, float height) {
     const int axisOrder[3] = {0, 2, 1};
     for (int axis : axisOrder) {
         if (delta[axis] == 0.0f) continue;
         pos[axis] += delta[axis];
-        for (const WorldBox& wb : world.boxes()) {
+
+        auto clampAgainst = [&](const AABB& box) {
             AABB pb = bounds(height);
-            if (!aabbOverlap(pb, wb.box)) continue;
+            if (!aabbOverlap(pb, box)) return;
             if (axis == 1) {
-                if (delta.y > 0.0f) pos.y = wb.box.min.y - height - kSkin; // head hit ceiling
-                else pos.y = wb.box.max.y + kSkin;                          // feet hit floor
+                if (delta.y > 0.0f) pos.y = box.min.y - height - kSkin; // head hit ceiling
+                else pos.y = box.max.y + kSkin;                         // feet hit floor
             } else {
-                if (delta[axis] > 0.0f) pos[axis] = wb.box.min[axis] - radius_ - kSkin;
-                else pos[axis] = wb.box.max[axis] + radius_ + kSkin;
+                if (delta[axis] > 0.0f) pos[axis] = box.min[axis] - radius_ - kSkin;
+                else pos[axis] = box.max[axis] + radius_ + kSkin;
             }
             vel[axis] = 0.0f;
+        };
+
+        for (const WorldBox& wb : world.boxes()) clampAgainst(wb.box);
+        for (const WorldEntity& e : world.entities()) {
+            if (e.active && e.solid) clampAgainst(e.bounds());
         }
     }
 }

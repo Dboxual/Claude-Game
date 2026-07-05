@@ -26,6 +26,21 @@ bool SdlFileSystem::exists(const std::string& path) const {
     return true;
 }
 
+bool SdlFileSystem::createDirectory(const std::string& path) const {
+    return SDL_CreateDirectory(path.c_str());
+}
+
+std::vector<std::string> SdlFileSystem::listDirectory(const std::string& path) const {
+    std::vector<std::string> names;
+    int count = 0;
+    char** entries = SDL_GlobDirectory(path.c_str(), nullptr, 0, &count);
+    if (!entries) return names;
+    names.reserve(size_t(count));
+    for (int i = 0; i < count; ++i) names.emplace_back(entries[i]);
+    SDL_free(entries);
+    return names;
+}
+
 std::string SdlFileSystem::basePath() const {
     const char* base = SDL_GetBasePath();
     return base ? base : "";

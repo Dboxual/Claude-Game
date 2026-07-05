@@ -5,6 +5,12 @@ No game engine — just **SDL3** (window/input), **OpenGL 3.3 core** (rendering,
 via a hand-rolled loader on top of `SDL_GL_GetProcAddress`), **GLM** (math),
 **CMake** + **vcpkg** (build/dependencies).
 
+This build is the **early sandbox foundation (Phase 2)**: on top of the
+movement prototype you can create and load local worlds, spawn objects from
+a categorized dev menu, pick up and use weapons (fists / karambit / Glock),
+and fight a respawning training dummy. Multiplayer, content packs, and
+plugins are later phases.
+
 ## What's in Milestone 1
 
 - First-person camera with mouse look (per-frame look, fixed 128 Hz simulation with render interpolation)
@@ -52,7 +58,32 @@ sudo apt-get install -y build-essential git cmake pkg-config \
 ```
 
 The first run clones vcpkg into `~/vcpkg`. If you already have vcpkg, set
-`VCPKG_ROOT` and both scripts will use it.
+`VCPKG_ROOT` and the scripts will use it.
+
+## Run it — macOS (Apple Silicon or Intel)
+
+Prerequisite (one-time): the Xcode Command Line Tools —
+
+```bash
+xcode-select --install
+```
+
+Then:
+
+```bash
+./run_macos.sh
+```
+
+The first run clones vcpkg into `~/vcpkg` (set `VCPKG_ROOT` to reuse an
+existing install) and compiles SDL3 from source — give it a few minutes.
+Every later run configures, builds, and starts the game in seconds. Homebrew
+is not required: if `cmake` is not on your PATH, the script fetches a private
+copy through vcpkg (a Homebrew cmake gets picked up automatically if you have
+one).
+
+macOS uses the same OpenGL 3.3 core renderer as Windows/Linux (Apple
+deprecated OpenGL but still ships it; a Metal backend is a later milestone —
+see [PORTING.md](PORTING.md)).
 
 ## Controls
 
@@ -63,6 +94,10 @@ The first run clones vcpkg into `~/vcpkg`. If you already have vcpkg, set
 | Space | Jump (buffered — a slightly early press still counts) |
 | Left Ctrl or C | Crouch (hold) |
 | Left Shift | Walk (hold) |
+| Q | Toggle the dev spawn menu (in game) |
+| E | Pick up the item you are looking at |
+| Left mouse | Attack with the equipped weapon |
+| 1 2 3 | Switch weapon slot |
 | Esc | In game: pause/resume. In menus: go back a screen |
 | F5 | Hot-reload `config/movement.cfg` |
 | F1 | Toggle debug HUD (saved to settings) |
@@ -71,11 +106,11 @@ The first run clones vcpkg into `~/vcpkg`. If you already have vcpkg, set
 ## Main menu, pause menu & settings
 
 The client boots to a **main menu** (over a slow orbit of the arena):
-**Singleplayer** (Start Test World now; Create World is a disabled
-coming-soon slot), **Multiplayer** (server-address field with typing,
-Connect and Localhost quick-connect buttons — both report that the
-connection system is a later milestone; Server Browser is a disabled
-coming-soon slot), **Settings**, and **Quit**.
+**Singleplayer** (Start Test World, Create World, Load World),
+**Multiplayer** (server-address field with typing, Connect and Localhost
+quick-connect buttons — both report that the connection system is a later
+milestone; Server Browser is a disabled coming-soon slot), **Settings**,
+and **Quit**.
 
 In game, Esc pauses: the simulation freezes, the mouse unlocks, and the pause
 menu offers **Resume / Settings / Quit to Menu**. The settings screen is
@@ -88,6 +123,48 @@ run, saved whenever you change something in the menu, loaded on startup, and
 safe to hand-edit (same `key = value` format as the movement config). Mouse
 sensitivity and FOV live there now rather than in `movement.cfg`, since they
 are player preferences rather than physics.
+
+## Sandbox worlds, weapons & dev spawn menu (Phase 2)
+
+**Create World** asks for a name and drops you into a fresh, enclosed flat
+map. Each world lives in its own folder, `worlds/<folder_name>/world.cfg` —
+a plain-text file (`key = value`, one `entity` line per placed object) that
+is safe to hand-edit and diff:
+
+```
+version = 2
+name = My World
+entity = crate 3.00 0.00 5.00 0
+entity = glock 1.50 0.00 3.00 10
+```
+
+The last number is **respawn seconds**: pickups/bots come back that long
+after being taken or destroyed; 0 means gone for good (v1 files without the
+field still load). **Load World** lists every world under `worlds/` and
+reopens it with all placed objects. The classic **test arena** is still
+there via Start Test World — it is a fixed training map and is never saved.
+
+In game, **Q** opens the dev/admin spawn menu (GMod-style category tabs:
+**Weapons / Bots / Props / Pickups**). Objects spawn a couple of meters in
+front of you; crates and dummies are solid and block movement, weapon
+pickups hover, bob, and are non-solid. Persistent worlds save automatically
+on every spawn and on Quit to Menu.
+
+**Weapons.** You start with fists. Look at a karambit or Glock pickup and
+press **E** — it is added to your inventory (bar at the bottom of the
+screen), auto-equipped, and vanishes from the world until it respawns.
+Switch with **1/2/3**, attack with **left mouse**. Fists and karambit are
+melee (short reach, swing cooldown); the Glock is a semi-auto hitscan
+pistol (unlimited ammo for now). The **training dummy** has 100 HP, flashes
+red on hits, shows its health when you aim at it, and respawns 5 seconds
+after being destroyed.
+
+All of it is data in `src/shared/content.cpp`: `WeaponDef` holds combat
+stats (damage/range/cooldown — deliberately knife-tier numbers, skins stay
+cosmetic), `EntityDef` holds world objects (size, solidity, health, respawn,
+multi-box placeholder visuals). World files reference string ids only, so
+definitions can move from C++ to data-driven content files in a later phase
+without touching saves.
 
 ## Tuning the movement
 
@@ -118,10 +195,14 @@ guide.
 ├── config/movement.cfg          # movement physics tunables (F5 hot-reload, shared)
 ├── config/settings.cfg          # client user settings, written by the pause menu (auto-created)
 ├── config/server.cfg            # dedicated server config: name, max players, tick rate
+├── worlds/<name>/world.cfg      # sandbox world saves (created in game, gitignored)
 ├── src/
 │   ├── shared/                  # compiled into BOTH client and server (std + glm only)
 │   │   ├── player.{h,cpp}       # movement controller (accel/friction/air/jump/crouch)
-│   │   ├── world.{h,cpp}        # AABB collision world + test map
+│   │   ├── world.{h,cpp}        # AABB world + entities: raycasts, damage, respawns
+│   │   ├── content.{h,cpp}      # weapon stats + entity defs (karambit/glock/dummy/crate)
+│   │   ├── inventory.h          # owned weapons + equipped slot (plain data)
+│   │   ├── world_save.{h,cpp}   # world file format: serialize/parse (string <-> struct)
 │   │   ├── config.{h,cpp}       # key=value parser + movement constants
 │   │   ├── log.{h,cpp}          # timestamped logging
 │   │   └── protocol.h           # future client<->server protocol (version stub only)
@@ -137,6 +218,7 @@ guide.
 │       └── dedicated_server.{h,cpp}  # config, fixed-tick loop, status logs
 ├── run_windows.bat              # one-click build + run client (Windows)
 ├── run_linux.sh                 # build + run client (Linux)
+├── run_macos.sh                 # build + run client (macOS)
 ├── CMakeLists.txt               # targets: tac_shared, tac_client_*, tacmove, tacmove_server
 ├── CMakePresets.json
 ├── PORTING.md                   # how future platforms slot in

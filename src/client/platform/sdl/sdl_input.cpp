@@ -6,6 +6,10 @@ const InputState& SdlInput::pump() {
     state_.escapePressed = false;
     state_.reloadConfigPressed = false;
     state_.toggleHudPressed = false;
+    state_.spawnMenuPressed = false;
+    state_.interactPressed = false;
+    state_.attackPressed = false;
+    state_.slotPressed = 0;
     state_.mouseClicked = false;
     state_.enterPressed = false;
     state_.backspacePressed = false;
@@ -29,6 +33,7 @@ const InputState& SdlInput::pump() {
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             state_.mouseClicked = true;
+            if (e.button.button == SDL_BUTTON_LEFT) state_.attackPressed = true;
             break;
         case SDL_EVENT_TEXT_INPUT:
             state_.typedText += e.text.text;
@@ -39,6 +44,11 @@ const InputState& SdlInput::pump() {
             if (e.key.key == SDLK_ESCAPE) state_.escapePressed = true;
             else if (e.key.key == SDLK_F5) state_.reloadConfigPressed = true;
             else if (e.key.key == SDLK_F1) state_.toggleHudPressed = true;
+            else if (e.key.key == SDLK_Q) state_.spawnMenuPressed = true;
+            else if (e.key.key == SDLK_E) state_.interactPressed = true;
+            else if (e.key.key >= SDLK_1 && e.key.key <= SDLK_9) {
+                state_.slotPressed = int(e.key.key - SDLK_1) + 1;
+            }
             else if (e.key.key == SDLK_RETURN) state_.enterPressed = true;
             else if (e.key.scancode == SDL_SCANCODE_SPACE) state_.jumpPressed = true;
             break;
