@@ -8,14 +8,14 @@ wip-m3-content-platform
 Current git state checked
 -------------------------
 git status --short:
-  clean before this handoff file was created
+  clean before this handoff file was updated
 
 git log --oneline -5:
+  8cf9747 Add Claude handoff notes
   474af6c Melee duel prototype: stamina, phases, parry/riposte/counter, kick, shield, throw
   fb9ac70 M3 feel pass: 3D viewmodels, weapon anims, sword, original audio set, Online tab
   b92c46a M3: content platform - data-driven defs, prop carrying, audio, viewmodel, server browser shell
   fe6496c WIP: macOS support + Phase 1/2 sandbox (worlds, spawn menu, weapons, combat)
-  f3199e5 CI: install autoconf-archive on Linux (vcpkg libxcrypt build requirement)
 
 Source notes read
 -----------------
@@ -45,7 +45,7 @@ What Claude added
 
 What is working
 ---------------
-- Worktree was clean before adding this file.
+- Worktree was clean before updating this file.
 - Branch is wip-m3-content-platform.
 - Windows Release build succeeded for both:
   - build/Release/tacmove.exe
@@ -111,7 +111,15 @@ Command:
   cmake --build build --config Release --parallel
 
 Result:
-  Succeeded on Windows after allowing access to the existing vcpkg tree at C:\Users\dkoca\vcpkg.
+  Succeeded on Windows after allowing the build to write to the existing build and vcpkg directories.
+
+Built outputs:
+  build\Release\tacmove.exe
+  build\Release\tacmove_server.exe
 
 Note:
-  The first build attempt inside the managed sandbox failed because vcpkg is outside the writable workspace. That was an environment permission issue, not a compiler/build failure.
+  The first build attempt inside the managed sandbox failed with permission errors while CMake/vcpkg tried to write:
+    C:\Users\dkoca\vcpkg\buildtrees\0.vcpkg_dep_info.cmake
+    C:\Users\dkoca\OneDrive\Desktop\Claude-Game\build\vcpkg-manifest-install.log
+    C:\Users\dkoca\OneDrive\Desktop\Claude-Game\build\CMakeCache.txt
+  Rerunning the same command with approved write access succeeded. This was an environment permission issue, not a compiler/build failure.
