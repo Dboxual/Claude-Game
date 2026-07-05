@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
     long long maxFrames = -1;  // --frames N: exit after N frames (smoke testing)
     bool startInWorld = false; // --world: skip the main menu, straight into the test world
     bool startPaused = false;  // --paused: start in-world on the pause menu (dev/testing)
+    const char* equipWeapon = nullptr; // --equip <id>: start in-world holding a weapon
     bool forceNoVsync = false;
     WindowDesc desc;
     desc.title = "TacMove - Movement Prototype (Milestone 1)";
@@ -50,6 +51,8 @@ int main(int argc, char** argv) {
             startPaused = true;
         } else if (std::strcmp(argv[i], "--world") == 0) {
             startInWorld = true;
+        } else if (std::strcmp(argv[i], "--equip") == 0 && i + 1 < argc) {
+            equipWeapon = argv[++i];
         }
     }
 
@@ -78,6 +81,7 @@ int main(int argc, char** argv) {
     game.setRendererName(renderer->name());
     if (forceNoVsync) game.overrideVsync(false); // CLI beats the saved setting
     if (startPaused) game.startInWorldPaused();
+    else if (equipWeapon) game.startInWorldEquipped(equipWeapon);
     else if (startInWorld) game.startInWorld();
 
     // The game boots to the main menu, so the mouse starts free and text

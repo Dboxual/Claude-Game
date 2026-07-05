@@ -4,6 +4,7 @@
 #include "client/platform/window.h"
 #include "client/renderer/common/font5x7.h"
 
+#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -16,12 +17,13 @@ layout(location = 1) in vec3 aNormal;
 uniform mat4 uProj;
 uniform mat4 uView;
 uniform mat4 uModel;
+uniform mat3 uNormalMat; // inverse-transpose: rotated viewmodel boxes shade right
 out vec3 vNormal;
 out vec3 vWorldPos;
 void main() {
     vec4 wp = uModel * vec4(aPos, 1.0);
     vWorldPos = wp.xyz;
-    vNormal = mat3(uModel) * aNormal; // axis-aligned scale only, normalize in FS
+    vNormal = uNormalMat * aNormal;
     gl_Position = uProj * uView * wp;
 }
 )GLSL";
@@ -32,6 +34,7 @@ in vec3 vNormal;
 in vec3 vWorldPos;
 uniform vec3 uColor;
 uniform int uChecker;
+uniform float uEmissive; // 1 = unlit (muzzle flash); world boxes pass 0
 out vec4 fragColor;
 void main() {
     vec3 n = normalize(vNormal);
@@ -43,6 +46,7 @@ void main() {
     }
     float fog = clamp(length(vWorldPos) / 140.0, 0.0, 0.35);
     col = mix(col, vec3(0.55, 0.65, 0.75), fog);
+    col = mix(col, uColor, uEmissive);
     fragColor = vec4(col, 1.0);
 }
 )GLSL";
@@ -183,8 +187,10 @@ bool GLRenderer::init(IWindow& window) {
     locProj_ = glGetUniformLocation(worldProg_, "uProj");
     locView_ = glGetUniformLocation(worldProg_, "uView");
     locModel_ = glGetUniformLocation(worldProg_, "uModel");
+    locNormalMat_ = glGetUniformLocation(worldProg_, "uNormalMat");
     locColor_ = glGetUniformLocation(worldProg_, "uColor");
     locChecker_ = glGetUniformLocation(worldProg_, "uChecker");
+    locEmissive_ = glGetUniformLocation(worldProg_, "uEmissive");
 
     glGenVertexArrays(1, &cubeVao_);
     glGenBuffers(1, &cubeVbo_);
@@ -267,6 +273,7 @@ void GLRenderer::render(const RenderFrame& frame) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     drawBoxes(frame);
+    drawViewmodel(frame);
     drawRects(frame);
     drawTexts(frame);
 
@@ -319,11 +326,42 @@ void GLRenderer::drawBoxes(const RenderFrame& frame) {
     glUniformMatrix4fv(locView_, 1, GL_FALSE, glm::value_ptr(frame.view));
 
     glBindVertexArray(cubeVao_);
+    glUniform1f(locEmissive_, 0.0f);
     for (const BoxDraw& box : frame.boxes) {
         glm::mat4 model = glm::scale(glm::translate(glm::mat4(1.0f), box.center), box.size);
+        glm::mat3 normalMat = glm::inverseTranspose(glm::mat3(model));
         glUniformMatrix4fv(locModel_, 1, GL_FALSE, glm::value_ptr(model));
+        glUniformMatrix3fv(locNormalMat_, 1, GL_FALSE, glm::value_ptr(normalMat));
         glUniform3f(locColor_, box.color.r, box.color.g, box.color.b);
         glUniform1i(locChecker_, box.checkerTop ? 1 : 0);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+    }
+    glBindVertexArray(0);
+}
+
+// First-person viewmodel: camera-space boxes through their own projection,
+// drawn over a cleared depth buffer so hands never intersect world geometry.
+void GLRenderer::drawViewmodel(const RenderFrame& frame) {
+    if (frame.viewmodelBoxes.empty()) return;
+
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_CULL_FACE);
+
+    glUseProgram(worldProg_);
+    glm::mat4 identity(1.0f);
+    glUniformMatrix4fv(locProj_, 1, GL_FALSE, glm::value_ptr(frame.viewmodelProj));
+    glUniformMatrix4fv(locView_, 1, GL_FALSE, glm::value_ptr(identity));
+    glUniform1i(locChecker_, 0);
+
+    glBindVertexArray(cubeVao_);
+    for (const ViewmodelBoxDraw& box : frame.viewmodelBoxes) {
+        glm::mat3 normalMat = glm::inverseTranspose(glm::mat3(box.transform));
+        glUniformMatrix4fv(locModel_, 1, GL_FALSE, glm::value_ptr(box.transform));
+        glUniformMatrix3fv(locNormalMat_, 1, GL_FALSE, glm::value_ptr(normalMat));
+        glUniform3f(locColor_, box.color.r, box.color.g, box.color.b);
+        glUniform1f(locEmissive_, box.emissive);
         glDrawArrays(GL_TRIANGLES, 0, 36);
     }
     glBindVertexArray(0);

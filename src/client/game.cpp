@@ -33,6 +33,20 @@ constexpr float kSpawnDistance = 2.5f;   // meters in front of the player
 constexpr float kInteractRange = 2.5f; // max distance for E-pickup
 constexpr float kAimInfoRange = 12.0f; // max distance for the target readout
 
+// Viewmodel animation.
+constexpr float kPi = 3.14159265f;
+constexpr float kEquipDuration = 0.25f; // weapon-raise time after switching
+
+// Composes translate * yaw * pitch * roll (degrees) for viewmodel groups
+// and boxes. Camera space: +X right, +Y up, -Z forward.
+glm::mat4 vmCompose(const glm::mat4& parent, glm::vec3 pos, glm::vec3 rotDeg) {
+    glm::mat4 m = glm::translate(parent, pos);
+    if (rotDeg.y != 0.0f) m = glm::rotate(m, glm::radians(rotDeg.y), glm::vec3(0, 1, 0));
+    if (rotDeg.x != 0.0f) m = glm::rotate(m, glm::radians(rotDeg.x), glm::vec3(1, 0, 0));
+    if (rotDeg.z != 0.0f) m = glm::rotate(m, glm::radians(rotDeg.z), glm::vec3(0, 0, 1));
+    return m;
+}
+
 bool contains(float px, float py, float x, float y, float w, float h) {
     return px >= x && px < x + w && py >= y && py < y + h;
 }
@@ -82,10 +96,12 @@ bool Game::init(IFileSystem& fs, IAudio* audio) {
     // Data-driven content: defs from server/content/ replace the builtins.
     loadContentFiles();
 
-    // Placeholder one-shots (original, synthesized - see content/sounds/).
-    // The event -> sound-name mapping is client code for now by design.
+    // Placeholder one-shots (original, synthesized by tools/generate_sounds -
+    // see content/sounds/CREDITS.md). The event -> sound-name mapping is
+    // client code for now by design.
     if (audio_) {
-        const char* names[] = {"footstep", "swing", "gunshot", "pickup", "dummy_hit"};
+        const char* names[] = {"footstep", "swing",     "gunshot", "pickup",
+                               "dummy_hit", "melee_hit", "ui_click"};
         for (const char* n : names) {
             audio_->loadSound(n, serverRoot_ + "content/sounds/" + n + ".wav");
         }
@@ -159,7 +175,10 @@ void Game::beginSession() {
     inventory_.reset("fists");
     attackCooldown_ = 0.0f;
     swingTimer_ = muzzleFlashTimer_ = hitMarkerTimer_ = 0.0f;
+    swingDuration_ = 0.18f;
     footstepDistance_ = 0.0f;
+    bobPhase_ = bobIntensity_ = equipTimer_ = 0.0f;
+    lastEquippedId_.clear(); // triggers the raise animation on the first frame
     carriedEntityId_ = 0;
     hudToast_.clear();
     hudToastTimer_ = 0.0;
@@ -446,7 +465,10 @@ void Game::tryAttack() {
         muzzleFlashTimer_ = 0.07f;
         sfx("gunshot");
     } else {
-        swingTimer_ = 0.18f;
+        // Heavier melee weapons swing slower so the viewmodel arc reads.
+        swingDuration_ = weapon->id == "sword" ? 0.32f
+                       : weapon->id == "karambit" ? 0.22f : 0.18f;
+        swingTimer_ = swingDuration_;
         sfx("swing");
     }
 
@@ -462,7 +484,7 @@ void Game::tryAttack() {
 
     std::string targetId = target.defId;
     hitMarkerTimer_ = 0.12f;
-    sfx("dummy_hit");
+    sfx(weapon->kind == WeaponKind::Melee ? "melee_hit" : "dummy_hit");
     bool destroyed = world_.damageEntity(hit.index, weapon->damage);
     aimInteract_ = {};
     aimInfo_ = {}; // entity vector may have shifted; refreshed next frame
@@ -628,6 +650,25 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - float(frameDt));
     if (hudToastTimer_ > 0.0) hudToastTimer_ -= frameDt;
 
+    // Viewmodel bob: phase advances with distance so it locks to the
+    // footstep cadence (one dip every ~2.1 m); intensity eases in and out
+    // so stopping settles the hands instead of freezing them mid-offset.
+    float hSpeed = player_.horizontalSpeed();
+    bool bobbing = player_.grounded && hSpeed > 0.5f;
+    bobIntensity_ += ((bobbing ? std::min(hSpeed / cfg_.runSpeed, 1.15f) : 0.0f) - bobIntensity_)
+                     * std::min(1.0f, 8.0f * float(frameDt));
+    if (bobbing) bobPhase_ += hSpeed * 1.5f * float(frameDt);
+
+    // Weapon switch (slot key or pickup) plays the raise animation and
+    // cancels any stale swing/flash from the previous weapon.
+    if (inventory_.equippedId() != lastEquippedId_) {
+        lastEquippedId_ = inventory_.equippedId();
+        equipTimer_ = kEquipDuration;
+        swingTimer_ = 0.0f;
+        muzzleFlashTimer_ = 0.0f;
+    }
+    equipTimer_ = std::max(0.0f, equipTimer_ - float(frameDt));
+
     updateCarriedProp(); // held prop follows the camera
     updateAimTarget();
     if (in.slotPressed > 0) inventory_.selectSlot(in.slotPressed - 1);
@@ -637,6 +678,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
 
 void Game::activateButton(UiButton::Id id, int payload) {
     using Id = UiButton::Id;
+    sfx("ui_click");
     bool settingsChanged = false;
     switch (id) {
     // Navigation.
@@ -804,8 +846,9 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
     case UiScreen::Multiplayer: {
         // CS-style server browser shell. The tabs are real; the lists are
         // honestly empty until server discovery exists (no fake servers).
-        static const char* kMpTabs[] = {"FAVORITES", "LAN", "HISTORY", "DIRECT CONNECT"};
-        constexpr int kMpTabCount = 4;
+        static const char* kMpTabs[] = {"ONLINE", "FAVORITES", "LAN", "HISTORY",
+                                        "DIRECT CONNECT"};
+        constexpr int kMpTabCount = 5;
         const float tabW = 170.0f, tabH = 40.0f, tabGap = 10.0f;
         float tabX = cx - (kMpTabCount * tabW + (kMpTabCount - 1) * tabGap) / 2;
         const float tabY = viewportH * 0.22f;
@@ -815,7 +858,7 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
             tabX += tabW + tabGap;
         }
 
-        if (mpTab_ == 3) { // Direct Connect: address box + actions
+        if (mpTab_ == 4) { // Direct Connect: address box + actions
             column(viewportH * 0.46f, {
                 {Id::Connect, 0, 0, 0, 0, "CONNECT", true},
                 {Id::QuickLocalhost, 0, 0, 0, 0, "LOCALHOST 127.0.0.1", true},
@@ -897,6 +940,9 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
     }
     float aspect = viewportH > 0 ? float(viewportW) / float(viewportH) : 1.0f;
     frame.proj = glm::perspective(glm::radians(settings_.fovDegrees), aspect, 0.05f, 300.0f);
+    // Fixed FOV for the first-person viewmodel so hands keep their size and
+    // shape no matter what world FOV the player runs.
+    frame.viewmodelProj = glm::perspective(glm::radians(58.0f), aspect, 0.02f, 8.0f);
 
     // World geometry.
     frame.boxes.reserve(world_.boxes().size() + world_.entities().size());
@@ -998,7 +1044,7 @@ void Game::appendHudDraws(RenderFrame& frame) const {
                       int(world_.entities().size()));
         addLine(dim, buf);
         addLine(glm::vec4(0.7f, 0.75f, 0.8f, 1.0f),
-                "ESC PAUSE  Q SPAWN  E PICK UP  LMB ATTACK  1-3 WEAPONS  F5 CFG  F1 HUD");
+                "ESC PAUSE  Q SPAWN  E PICK UP  LMB ATTACK  1-4 WEAPONS  F5 CFG  F1 HUD");
 
         // Big speedometer under the crosshair; green when above run speed
         // (i.e. you gained speed through air-strafing).
@@ -1098,66 +1144,159 @@ void Game::appendHudDraws(RenderFrame& frame) const {
     centeredLine(viewportH - 46.0f, 2.0f, white, bar);
 }
 
-// First-person hands + held weapon, composed from screen-space rects
-// (Doom-style, anchored at the bottom edge). Purely cosmetic placeholder:
-// no art pipeline, no rotation - just enough that fists read as fists, the
-// karambit as a claw in a fist, and the glock as a pistol you sight over.
+// First-person hands + held weapon in real 3D: lit, oriented boxes in
+// camera space, drawn by the backends through RenderFrame::viewmodelProj
+// over a cleared depth buffer. Still no art pipeline - every shape is a
+// box - but the result reads as an actual item in the hand: perspective,
+// shading, movement bob, and per-weapon animation (punch / recoil / slash /
+// swing) instead of flat screen rectangles.
 void Game::appendViewmodelDraws(RenderFrame& frame) const {
-    const float vw = float(frame.viewportW);
-    const float vh = float(frame.viewportH);
-    const float cx = vw * 0.5f;
+    const glm::vec3 skin(0.82f, 0.63f, 0.49f);
+    const glm::vec3 skinShade(0.72f, 0.53f, 0.40f);
+    const glm::vec3 sleeve(0.23f, 0.27f, 0.33f);
+    const glm::vec3 metalDark(0.13f, 0.14f, 0.17f);
+    const glm::vec3 metalMid(0.26f, 0.28f, 0.32f);
+    const glm::vec3 steel(0.72f, 0.76f, 0.82f);
+    const glm::vec3 steelBright(0.86f, 0.89f, 0.94f);
+    const glm::vec3 steelDark(0.55f, 0.59f, 0.65f);
+    const glm::vec3 gripBrown(0.32f, 0.21f, 0.12f);
+    const glm::vec3 guardGold(0.72f, 0.58f, 0.22f);
 
-    const glm::vec4 skin(0.85f, 0.66f, 0.52f, 1.0f);
-    const glm::vec4 sleeve(0.24f, 0.28f, 0.34f, 1.0f);
-    const glm::vec4 metal(0.14f, 0.15f, 0.18f, 1.0f);
-    const glm::vec4 metalLight(0.26f, 0.28f, 0.32f, 1.0f);
-    const glm::vec4 silver(0.80f, 0.84f, 0.90f, 1.0f);
+    auto box = [&frame](const glm::mat4& parent, glm::vec3 pos, glm::vec3 rotDeg,
+                        glm::vec3 size, glm::vec3 color, float emissive = 0.0f) {
+        ViewmodelBoxDraw draw;
+        draw.transform = glm::scale(vmCompose(parent, pos, rotDeg), size);
+        draw.color = color;
+        draw.emissive = emissive;
+        frame.viewmodelBoxes.push_back(draw);
+    };
 
-    // Swing animation: 0 -> 1 over the melee cooldown flash, arcing up-left.
-    float swing = swingTimer_ > 0.0f ? 1.0f - swingTimer_ / 0.18f : 0.0f;
-    float arc = std::sin(swing * 3.14159f);
-    // Pistol recoil kick, decaying with the muzzle flash.
+    // Shared animation inputs. arc runs 0 -> 1 -> 0 over a melee swing so
+    // every attack moves out and returns; kick decays with the muzzle flash.
+    float swingT = swingTimer_ > 0.0f ? 1.0f - swingTimer_ / swingDuration_ : -1.0f;
+    float arc = swingT >= 0.0f ? std::sin(swingT * kPi) : 0.0f;
     float kick = muzzleFlashTimer_ > 0.0f ? muzzleFlashTimer_ / 0.07f : 0.0f;
+    float lower = equipTimer_ > 0.0f ? equipTimer_ / kEquipDuration : 0.0f;
 
-    auto rect = [&](float x, float y, float w, float h, const glm::vec4& c) {
-        frame.rects.push_back({x, y, w, h, c});
+    // Root: walk bob (phase locked to the footstep cadence), a slow idle
+    // breath, and the equip animation raising the weapon from below.
+    glm::vec3 rootPos(std::sin(bobPhase_) * 0.013f * bobIntensity_,
+                      -std::abs(std::sin(bobPhase_)) * 0.011f * bobIntensity_
+                          - 0.004f * std::sin(float(menuTime_) * 1.6f)
+                          - lower * lower * 0.30f,
+                      0.0f);
+    glm::mat4 root = vmCompose(glm::mat4(1.0f), rootPos,
+                               {lower * -35.0f, 0.0f, lower * 12.0f});
+
+    // A clenched fist with the forearm sleeve running down off-screen.
+    auto fistAndArm = [&](glm::vec3 pos, glm::vec3 rotDeg, bool left) {
+        float s = left ? -1.0f : 1.0f;
+        glm::mat4 hand = vmCompose(root, pos, rotDeg);
+        box(hand, {0.0f, 0.0f, 0.0f}, {0, 0, 0}, {0.105f, 0.095f, 0.115f}, skin);
+        box(hand, {0.0f, -0.008f, -0.068f}, {0, 0, 0}, {0.098f, 0.082f, 0.034f},
+            skinShade); // curled fingers
+        box(hand, {s * -0.058f, -0.012f, -0.01f}, {0, 0, 0}, {0.032f, 0.055f, 0.07f},
+            skinShade); // thumb side
+        box(hand, {s * 0.008f, -0.03f, 0.10f}, {0, 0, 0}, {0.095f, 0.085f, 0.09f},
+            skin); // wrist
+        box(hand, {s * 0.03f, -0.14f, 0.26f}, {50.0f, s * -8.0f, 0.0f},
+            {0.115f, 0.115f, 0.36f}, sleeve); // forearm
     };
 
     const std::string& weapon = inventory_.equippedId();
     if (weapon == "glock") {
-        float gx = cx + 70.0f;          // gun center x
-        float gy = vh - 168.0f + kick * 12.0f;
-        // Hands gripping from both sides, forearms running off-screen.
-        rect(gx - 52.0f, gy + 64.0f, 44.0f, 60.0f, skin);
-        rect(gx + 8.0f, gy + 64.0f, 44.0f, 60.0f, skin);
-        rect(gx - 60.0f, gy + 118.0f, 56.0f, vh, sleeve);
-        rect(gx + 4.0f, gy + 118.0f, 56.0f, vh, sleeve);
-        // Grip and back of the slide (what you see when sighting a pistol).
-        rect(gx - 20.0f, gy + 36.0f, 40.0f, 44.0f, metalLight);
-        rect(gx - 26.0f, gy, 52.0f, 40.0f, metal);
-        rect(gx - 4.0f, gy - 8.0f, 8.0f, 10.0f, metalLight); // rear sight
+        // Two-handed pistol held center-right; recoil kicks the muzzle up
+        // and the whole gun back, decaying with the flash.
+        glm::mat4 gun = vmCompose(root,
+                                  glm::vec3(0.15f, -0.145f, -0.38f)
+                                      + glm::vec3(0.0f, kick * 0.012f, kick * 0.05f),
+                                  {kick * 14.0f - 2.0f, -4.0f, -2.0f});
+        // Slide, top rib, sights, frame.
+        box(gun, {0.0f, 0.043f, -0.055f}, {0, 0, 0}, {0.05f, 0.052f, 0.245f}, metalDark);
+        box(gun, {0.0f, 0.072f, -0.055f}, {0, 0, 0}, {0.036f, 0.012f, 0.245f}, metalMid);
+        box(gun, {0.0f, 0.086f, 0.058f}, {0, 0, 0}, {0.034f, 0.016f, 0.014f}, metalMid);
+        box(gun, {0.0f, 0.088f, -0.168f}, {0, 0, 0}, {0.010f, 0.018f, 0.012f}, metalMid);
+        box(gun, {0.0f, -0.002f, -0.075f}, {0, 0, 0}, {0.046f, 0.038f, 0.19f}, metalMid);
+        // Raked-back grip, mag base, trigger guard.
+        box(gun, {0.0f, -0.075f, 0.05f}, {-16.0f, 0, 0}, {0.046f, 0.155f, 0.062f}, metalDark);
+        box(gun, {0.0f, -0.148f, 0.072f}, {-16.0f, 0, 0}, {0.052f, 0.022f, 0.07f}, metalMid);
+        box(gun, {0.0f, -0.045f, -0.052f}, {0, 0, 0}, {0.012f, 0.042f, 0.012f}, metalDark);
+        box(gun, {0.0f, -0.062f, -0.012f}, {0, 0, 0}, {0.012f, 0.012f, 0.08f}, metalDark);
+        // Hands: right palm on the grip, fingers wrapping the front strap,
+        // left hand cupping from the left with the thumb forward.
+        box(gun, {0.035f, -0.08f, 0.055f}, {-16.0f, 0, 0}, {0.036f, 0.13f, 0.08f}, skin);
+        box(gun, {0.0f, -0.07f, 0.018f}, {-16.0f, 0, 0}, {0.058f, 0.095f, 0.032f}, skinShade);
+        box(gun, {-0.036f, -0.09f, 0.045f}, {-16.0f, 0, 0}, {0.034f, 0.115f, 0.085f}, skin);
+        box(gun, {-0.02f, -0.052f, -0.03f}, {0, 0, 0}, {0.03f, 0.026f, 0.07f}, skinShade);
+        // Forearms.
+        box(gun, {0.07f, -0.24f, 0.24f}, {50.0f, -10.0f, 0.0f}, {0.115f, 0.115f, 0.34f}, sleeve);
+        box(gun, {-0.075f, -0.25f, 0.22f}, {50.0f, 12.0f, 0.0f}, {0.115f, 0.115f, 0.32f}, sleeve);
+        // Muzzle flash: emissive star while the timer runs.
         if (muzzleFlashTimer_ > 0.0f) {
-            rect(gx - 16.0f, gy - 42.0f, 32.0f, 30.0f, {1.0f, 0.85f, 0.30f, 0.9f});
-            rect(gx - 7.0f, gy - 34.0f, 14.0f, 16.0f, {1.0f, 1.0f, 0.80f, 0.95f});
+            box(gun, {0.0f, 0.043f, -0.225f}, {0, 0, 45.0f}, {0.055f, 0.055f, 0.06f},
+                {1.0f, 0.80f, 0.25f}, 1.0f);
+            box(gun, {0.0f, 0.043f, -0.235f}, {0, 0, 0}, {0.035f, 0.035f, 0.09f},
+                {1.0f, 0.95f, 0.70f}, 1.0f);
         }
     } else if (weapon == "karambit") {
-        // Right fist holding the claw; the whole cluster arcs on a swing.
-        float fx = cx + 150.0f - arc * 90.0f;
-        float fy = vh - 120.0f - arc * 110.0f;
-        rect(fx, fy, 62.0f, 62.0f, skin);
-        rect(fx + 4.0f, fy + 56.0f, 54.0f, vh, sleeve);
-        rect(fx + 14.0f, fy - 10.0f, 18.0f, 14.0f, silver);  // finger ring
-        rect(fx - 34.0f, fy + 10.0f, 36.0f, 13.0f, silver);  // blade root
-        rect(fx - 58.0f, fy + 20.0f, 28.0f, 11.0f, silver);  // blade mid
-        rect(fx - 74.0f, fy + 32.0f, 20.0f, 9.0f, silver);   // curving tip
+        // Reverse grip: safety ring over the fist, claw blade hooking down
+        // out of the pinky side. The slash sweeps the whole arm across the
+        // screen and back.
+        glm::vec3 hPos(0.20f, -0.125f, -0.42f);
+        glm::vec3 hRot(14.0f, 24.0f, -8.0f); // angled in so the claw aims at the crosshair
+        if (swingT >= 0.0f) {
+            hPos += glm::vec3(-0.34f, 0.02f, -0.10f) * arc;
+            hRot += glm::vec3(-10.0f, -55.0f, -35.0f) * arc;
+        }
+        glm::mat4 hand = vmCompose(root, hPos, hRot);
+        box(hand, {0.0f, 0.0f, 0.0f}, {0, 0, 0}, {0.105f, 0.095f, 0.115f}, skin);
+        box(hand, {0.0f, -0.008f, -0.068f}, {0, 0, 0}, {0.098f, 0.082f, 0.034f}, skinShade);
+        box(hand, {-0.058f, -0.012f, -0.01f}, {0, 0, 0}, {0.032f, 0.055f, 0.07f}, skinShade);
+        box(hand, {0.008f, -0.03f, 0.10f}, {0, 0, 0}, {0.095f, 0.085f, 0.09f}, skin);
+        box(hand, {0.03f, -0.14f, 0.26f}, {50.0f, -8.0f, 0.0f}, {0.115f, 0.115f, 0.36f}, sleeve);
+        // Safety ring standing on the top of the fist.
+        box(hand, {0.0f, 0.062f, 0.028f}, {0, 0, 0}, {0.016f, 0.018f, 0.055f}, steel);
+        box(hand, {0.0f, 0.082f, 0.028f}, {0, 0, 0}, {0.016f, 0.016f, 0.038f}, steelBright);
+        // Claw: juts forward out of the bottom of the fist, each segment
+        // pitching further down so the blade reads as a hook aimed ahead.
+        box(hand, {0.0f, -0.062f, -0.075f}, {-12.0f, 0, 0}, {0.022f, 0.032f, 0.13f}, steel);
+        box(hand, {0.0f, -0.085f, -0.155f}, {-40.0f, 0, 0}, {0.020f, 0.028f, 0.11f}, steelBright);
+        box(hand, {0.0f, -0.125f, -0.20f}, {-75.0f, 0, 0}, {0.018f, 0.024f, 0.09f}, steel);
+    } else if (weapon == "sword") {
+        // Both hands stacked on the grip low-right, blade angled up across
+        // the view; the swing is a diagonal cut down and to the left.
+        glm::vec3 sPos(0.21f, -0.17f, -0.50f);
+        glm::vec3 sRot(34.0f, -10.0f, -8.0f);
+        if (swingT >= 0.0f) {
+            sPos += glm::vec3(-0.26f, -0.02f, -0.10f) * arc;
+            sRot += glm::vec3(-70.0f, -35.0f, -30.0f) * arc;
+        }
+        glm::mat4 sw = vmCompose(root, sPos, sRot);
+        // Grip, pommel, crossguard.
+        box(sw, {0.0f, 0.0f, 0.10f}, {0, 0, 0}, {0.034f, 0.045f, 0.15f}, gripBrown);
+        box(sw, {0.0f, 0.0f, 0.185f}, {0, 0, 0}, {0.052f, 0.06f, 0.038f}, guardGold);
+        box(sw, {0.0f, 0.0f, 0.015f}, {0, 0, 0}, {0.19f, 0.026f, 0.034f}, guardGold);
+        // Blade with a raised fuller and a tapering tip.
+        box(sw, {0.0f, 0.0f, -0.33f}, {0, 0, 0}, {0.016f, 0.055f, 0.62f}, steel);
+        box(sw, {0.0f, 0.0f, -0.30f}, {0, 0, 0}, {0.019f, 0.018f, 0.52f}, steelDark);
+        box(sw, {0.0f, 0.0f, -0.67f}, {0, 0, 0}, {0.014f, 0.040f, 0.07f}, steelBright);
+        box(sw, {0.0f, 0.0f, -0.715f}, {0, 0, 0}, {0.012f, 0.022f, 0.045f}, steelBright);
+        // Hands on the grip, forearms running down off-screen.
+        box(sw, {0.0f, 0.0f, 0.065f}, {0, 0, 0}, {0.062f, 0.075f, 0.065f}, skin);
+        box(sw, {0.0f, 0.0f, 0.135f}, {0, 0, 0}, {0.060f, 0.072f, 0.062f}, skinShade);
+        box(sw, {0.05f, -0.14f, 0.30f}, {50.0f, -10.0f, 0.0f}, {0.115f, 0.115f, 0.34f}, sleeve);
+        box(sw, {-0.02f, -0.16f, 0.32f}, {52.0f, 10.0f, 0.0f}, {0.115f, 0.115f, 0.32f}, sleeve);
     } else { // fists (and any unknown weapon id)
-        float lx = cx - 210.0f;
-        float rx = cx + 148.0f - arc * 110.0f; // right fist throws the punch
-        float ry = vh - 104.0f - arc * 130.0f;
-        rect(lx, vh - 104.0f, 62.0f, 62.0f, skin);
-        rect(lx + 4.0f, vh - 48.0f, 54.0f, vh, sleeve);
-        rect(rx, ry, 62.0f, 62.0f, skin);
-        rect(rx + 4.0f, ry + 56.0f, 54.0f, vh, sleeve);
+        // Right fist throws the punch - forward lunge with a slight inward
+        // hook - while the left stays in guard.
+        glm::vec3 rPos(0.235f, -0.22f, -0.48f);
+        glm::vec3 rRot(8.0f, -10.0f, -6.0f);
+        if (swingT >= 0.0f) {
+            rPos += glm::vec3(-0.10f, 0.05f, -0.30f) * arc;
+            rRot += glm::vec3(-6.0f, 18.0f, 10.0f) * arc;
+        }
+        fistAndArm(rPos, rRot, false);
+        fistAndArm({-0.24f, -0.24f, -0.50f}, {10.0f, 14.0f, 8.0f}, true);
     }
 }
 
@@ -1258,7 +1397,7 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
     // Multiplayer: tab body. Direct Connect has the address box; the list
     // tabs state plainly that nothing is discoverable yet - no fake servers.
     if (ui_ == UiScreen::Multiplayer) {
-        if (mpTab_ == 3) {
+        if (mpTab_ == 4) {
             float boxX = cx - kAddressBoxW / 2;
             float boxY = viewportH * 0.32f;
             centeredText(cx, boxY - 26.0f, 2.0f, label, "SERVER ADDRESS");
@@ -1280,10 +1419,14 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
             const char* line2 = "";
             switch (mpTab_) {
             case 0:
+                line1 = "ONLINE SERVER LIST REQUIRES MASTER SERVER BACKEND";
+                line2 = "SEE ONLINE_SERVERS.MD FOR WHAT THAT TAKES - NO SERVERS ARE FAKED HERE";
+                break;
+            case 1:
                 line1 = "NO FAVORITES YET";
                 line2 = "SERVERS CAN BE FAVORITED ONCE JOINING THEM EXISTS";
                 break;
-            case 1:
+            case 2:
                 line1 = "NO SERVERS FOUND";
                 line2 = "LAN DISCOVERY IS NOT IMPLEMENTED YET";
                 break;

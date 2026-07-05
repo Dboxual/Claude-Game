@@ -107,6 +107,7 @@ using GLintptr = std::ptrdiff_t;
     X(void, glUniform2f, GLint, GLfloat, GLfloat) \
     X(void, glUniform3f, GLint, GLfloat, GLfloat, GLfloat) \
     X(void, glUniform4f, GLint, GLfloat, GLfloat, GLfloat, GLfloat) \
+    X(void, glUniformMatrix3fv, GLint, GLsizei, GLboolean, const GLfloat*) \
     X(void, glUniformMatrix4fv, GLint, GLsizei, GLboolean, const GLfloat*) \
     X(void, glGenVertexArrays, GLsizei, GLuint*) \
     X(void, glDeleteVertexArrays, GLsizei, const GLuint*) \

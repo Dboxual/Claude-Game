@@ -15,6 +15,7 @@ public:
 
 private:
     void drawBoxes(const RenderFrame& frame);
+    void drawViewmodel(const RenderFrame& frame);
     void drawRects(const RenderFrame& frame);
     void drawTexts(const RenderFrame& frame);
     void addTextQuads(float x, float y, float scale, const float rgba[4], const std::string& text);
@@ -25,6 +26,7 @@ private:
     GLuint cubeVao_ = 0;
     GLuint cubeVbo_ = 0;
     GLint locProj_ = -1, locView_ = -1, locModel_ = -1, locColor_ = -1, locChecker_ = -1;
+    GLint locNormalMat_ = -1, locEmissive_ = -1;
 
     GLuint textProg_ = 0;
     GLuint textVao_ = 0;

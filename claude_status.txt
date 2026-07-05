@@ -1,42 +1,85 @@
-TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 2)
+TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 3)
 ============================================================================
 
-Second drop on this branch: M3 "content platform" alignment on top of the
-Phase 1/2 sandbox. Written by Claude on an Apple Silicon MacBook (M2);
-CODEX_REVIEW.md has the detailed handoff.
+Third drop on this branch: feel & presentation pass on the sandbox. Written
+by Claude on Windows 11 (MSVC, RTX 4060 Ti). Focus: replace the flat
+screen-rect viewmodels with real 3D first-person models, better original
+audio with a license-audited credits file, a sword, and the Online tab of
+the server browser (honest placeholder + design doc).
 
-DONE THIS DROP (built + tested on macOS arm64, client and server, no warnings)
-------------------------------------------------------------------------------
-- Content platform: weapon + entity definitions moved OUT of C++ into data
-  files under server/content/ (weapons/*.cfg, entities/*.cfg, one def per
-  file, same key=value format as everything else). The client loads them at
-  startup through shared/content_loader; a file with a builtin's id replaces
-  the builtin, and the C++ builtins remain only as a fallback so the game
-  runs without the folder. Layout documented in server/README.md; items/ and
-  maps/ are reserved-and-empty on purpose.
-- server.cfg moved to server/server.cfg (old config/ path still works);
-  CI artifact staging updated; CMake now copies server/ next to binaries.
-- Respawn rules made explicit and data-visible: respawn_seconds lives in
-  every entity def file and world save line. Props (crate, new barrel) are
-  0 = never; weapon pickups 10 s; dummy 5 s after death. Configurable per
-  placed entity in the world file.
-- Prop carrying: E on a carryable prop picks it up (floats ahead, stops
-  colliding), E drops it and it settles onto whatever is below. carryable
-  is a plain boolean per definition - crate yes, barrel/dummy no. Carried
-  props are tracked by a new stable per-entity id, not a vector index.
-- Audio: real SDL3 playback (device + 8 mixed voices). Five ORIGINAL
-  placeholder sounds - footstep, swing, gunshot, pickup, dummy hit - all
-  synthesized from sine/noise by a script (no recordings, no copyrighted
-  audio), living in server/content/sounds/. Master/SFX volume settings are
-  applied per play; music volume is stored but nothing plays music.
-- Viewmodel: simple first-person hands + held weapon composed from
-  screen-space rects (Doom-style). Fists punch, karambit fist+claw swings,
-  glock has back-of-slide + grip + muzzle flash + recoil kick. Cosmetic
-  only, no art pipeline.
-- Multiplayer: CS-style server browser shell with Favorites / LAN /
-  History / Direct Connect tabs. Direct Connect keeps the address box and
-  honest "connection system not implemented yet" status. The list tabs say
-  plainly that nothing is discoverable yet - no fake servers anywhere.
+DONE THIS DROP (built + verified on Windows x64, client and server, no warnings)
+--------------------------------------------------------------------------------
+- 3D first-person viewmodels replace the Doom-style screen rects entirely.
+  New ViewmodelBoxDraw path: camera-space oriented boxes (full
+  translate*rotate*scale transforms) drawn after the world with the depth
+  buffer cleared, view = identity, and a dedicated fixed-FOV projection
+  (RenderFrame::viewmodelProj, 58 deg) so hands keep their shape at any
+  world FOV and never clip into walls. GL shader gained a proper
+  inverse-transpose normal matrix (rotated boxes shade correctly) and a
+  uEmissive uniform (full-bright muzzle flash). gl_loader now exposes
+  glUniformMatrix3fv.
+- Viewmodels for all four weapons, composed from lit boxes in
+  Game::appendViewmodelDraws (still no art pipeline, by design):
+    fists    - two clenched fists w/ curled fingers, thumbs, sleeves
+    glock    - slide/rib/sights/frame/raked grip/trigger guard, two hands,
+               emissive muzzle-flash star
+    karambit - reverse-grip fist, safety ring on top, 3-segment claw
+               hooking forward at the crosshair
+    sword    - straight blade w/ raised fuller + tapered tip, gold
+               crossguard + pommel, leather grip, two stacked hands
+  All verified by on-screen screenshots per weapon (--equip flag below).
+- Weapon animation: fists punch (forward lunge + hook), glock recoil
+  (muzzle-up kick + rearward shove, decays with the flash), karambit slash
+  (whole arm sweeps across the screen and back), sword diagonal cut. Melee
+  swing duration is per weapon (fists .18s / karambit .22s / sword .32s -
+  swingDuration_ drives the anim so the arc always completes). Plus: walk
+  bob phase-locked to the footstep cadence (eases out when stopping), slow
+  idle breathing, and a raise animation on every weapon switch (also
+  cancels stale swing/flash state from the previous weapon).
+- Sword: new weapon (melee, 45 dmg, 2.4 m reach, 0.7 s cooldown - longest
+  reach, slowest swing) + world pickup with multi-part visual. Ships as
+  server/content/weapons/sword.cfg + entities/sword.cfg with matching C++
+  builtin fallbacks. Spawnable from the dev menu like the others.
+- Audio: seven ORIGINAL sounds, all synthesized by the new standalone tool
+  tools/generate_sounds.cpp (std-only C++17, deterministic noise so
+  re-running reproduces identical files; build/run instructions in its
+  header). Existing five regenerated with better shaping (bandpass whoosh,
+  saturated gunshot crack, two-note pickup chime...), two NEW events wired
+  in: melee_hit (melee impact - sharper than the bullet thud) and ui_click
+  (every menu button press, via Game::activateButton). Hitscan impacts
+  keep dummy_hit; melee impacts now play melee_hit.
+- Audio credits: server/content/sounds/CREDITS.md lists every wav with
+  played-on / source / license columns (all original, CC0), states the
+  reject-unsafe-licenses policy, and documents how future sounds get
+  added. No ripped or unlicensed audio anywhere.
+- Server browser: new ONLINE tab (first tab, before Favorites / LAN /
+  History / Direct Connect). It shows "ONLINE SERVER LIST REQUIRES MASTER
+  SERVER BACKEND" and points at ONLINE_SERVERS.md - no fake servers.
+  Direct Connect tab index moved 3 -> 4 (wantsTextInput and the default
+  tab follow).
+- ONLINE_SERVERS.md (repo root): what a real online list needs - master
+  server API (register/heartbeat/list endpoints), server heartbeat &
+  de-registration, UDP query/status protocol (anti-amplification +
+  challenge tokens; doubles as the LAN-tab probe), client fetch + direct
+  re-query flow, NAT/port-forwarding notes, and moderation/security
+  basics (validation, rate limits, delisting, protocol gating).
+- Dev flag: --equip <weapon id> starts in the test world holding that
+  weapon (used for the viewmodel screenshot verification loop).
+- README.md updated (viewmodels, sounds + credits, sword, Online tab,
+  controls 1-4, --equip, tools/ + ONLINE_SERVERS.md in the tree);
+  server/README.md sounds section points at CREDITS.md.
+
+VERIFIED THIS DROP
+------------------
+- Client + server build clean with /W4, zero warnings (MSVC 2022, CMake
+  desktop preset, vcpkg toolchain).
+- Smoke tests pass: tacmove --world --frames 240 (exit 0, audio device up,
+  10 content defs loaded) and tacmove_server --ticks 256 (exit 0).
+- On-screen verification via scripted screenshots: all four viewmodels
+  (fists/glock/karambit/sword idle poses) and the Multiplayer screen with
+  the ONLINE tab selected showing the master-server notice.
+- tools/generate_sounds.cpp compiled + run on Windows; all seven WAVs
+  regenerated deterministically into server/content/sounds/.
 
 UNFINISHED (known, deliberate)
 ------------------------------
@@ -44,25 +87,35 @@ UNFINISHED (known, deliberate)
   now); it still only reads server.cfg. Lands with server-side simulation.
 - Sound-event mapping (which wav plays when) is client code, not data.
 - Map geometry is still code-built; server/content/maps/ is reserved.
-- No ammo, no player health, no LAN discovery, no favorites persistence.
-- Carried props can be dropped overlapping the player/walls in odd spots
-  (they settle downward but there is no push-out; nothing gets stuck).
+- No ammo, no player health, no LAN discovery, no favorites persistence,
+  no networking (Online tab is a truthful placeholder; ONLINE_SERVERS.md
+  is the plan, not an implementation).
+- Carried props can be dropped overlapping the player/walls in odd spots;
+  the carried prop still floats ahead of the camera instead of appearing
+  in the viewmodel hands.
 - Spawn placement still naive (2.5 m ahead); Load World caps at 7 worlds.
-- Viewmodel does not show the carried prop in your "hands" (the prop
-  itself floats in front of the camera instead).
+- Viewmodel geometry/animation values are hand-tuned constants in
+  appendViewmodelDraws - fine for placeholder, moves to data when a real
+  asset pipeline exists.
 
 BROKEN / WATCH OUT
 ------------------
-- Nothing known-broken: all local test suites pass (unit + a headless
-  integration test that drives the real menus/gameplay: spawn -> pickup ->
-  shoot -> respawn -> melee -> carry/drop -> save/load), plus on-screen
-  client smoke test and server smoke test.
-- Sharp edge for reviewers: WorldEntity now carries a stable `id` next to
-  positional indices. Anything held across frames must use ids (the carry
-  system does); per-frame raycast hits still use indices.
+- Nothing known-broken. The macOS-side test suites mentioned in update 2
+  were not re-run here (this drop was built/verified on Windows; CI covers
+  the three platforms on push).
+- Sharp edge for reviewers: RenderFrame gained viewmodelProj +
+  viewmodelBoxes; only the GL backend consumes them (Vulkan/Metal/GLES are
+  still 9-line stubs, unchanged). The world-box path now also sets a
+  normal-matrix uniform - if a future backend copies drawBoxes, remember
+  uNormalMat and uEmissive.
+- Viewmodel rotation sign convention (camera space, -Z forward): positive
+  pitch raises the muzzle/tip, positive yaw swings it toward screen-LEFT.
+  Got the karambit yaw backwards twice during tuning; screenshots caught it.
 
 BUILD / RUN
 -----------
-  macOS:   ./run_macos.sh            (smoke: --frames 120 --world --novsync)
-  Linux:   ./run_linux.sh            Windows: run_windows.bat
-  Server:  ./build/tacmove_server --ticks 384
+  Windows: run_windows.bat        (smoke: --frames 240 --world --novsync)
+  macOS:   ./run_macos.sh         Linux: ./run_linux.sh
+  Server:  build\Release\tacmove_server.exe --ticks 384
+  Sounds:  see header of tools/generate_sounds.cpp (cl or c++, no deps)
+  Dev:     tacmove --equip sword  (straight into the world holding it)

@@ -36,6 +36,16 @@ void ContentRegistry::registerBuiltins() {
         w.cooldownSeconds = 0.15f; // semi-auto; ammo is a later phase
         weapons_.push_back(w);
     }
+    {
+        WeaponDef w;
+        w.id = "sword";
+        w.displayName = "Sword";
+        w.kind = WeaponKind::Melee;
+        w.damage = 45.0f;
+        w.range = 2.4f;          // longest melee reach...
+        w.cooldownSeconds = 0.7f; // ...paid for with the slowest swing
+        weapons_.push_back(w);
+    }
 
     // --- entity defs. 'fists' has no pickup: it is the base loadout.
 
@@ -43,6 +53,8 @@ void ContentRegistry::registerBuiltins() {
     const glm::vec3 gunGrip{0.24f, 0.22f, 0.20f};
     const glm::vec3 blade{0.78f, 0.83f, 0.88f};
     const glm::vec3 handleDark{0.12f, 0.12f, 0.14f};
+    const glm::vec3 guardGold{0.72f, 0.58f, 0.22f};
+    const glm::vec3 gripBrown{0.32f, 0.21f, 0.12f};
 
     {
         // Karambit pickup: handle + finger ring at the back, blade segments
@@ -80,6 +92,26 @@ void ContentRegistry::registerBuiltins() {
             {{-0.16f, 0.175f, 0.0f}, {0.04f, 0.05f, 0.04f}, gunMetal}, // muzzle
             {{0.10f, 0.085f, 0.0f}, {0.075f, 0.13f, 0.045f}, gunGrip}, // grip
             {{0.02f, 0.115f, 0.0f}, {0.09f, 0.02f, 0.03f}, gunGrip},   // trigger guard
+        };
+        defs_.push_back(d);
+    }
+    {
+        // Sword pickup: straight blade, gold crossguard and pommel, leather
+        // grip - a simple fantasy arming sword lying flat.
+        EntityDef d;
+        d.id = "sword";
+        d.displayName = "Sword Pickup";
+        d.category = ContentCategory::Weapon;
+        d.size = {0.60f, 0.30f, 0.45f};
+        d.color = blade;
+        d.weaponId = "sword";
+        d.respawnSeconds = 10.0f;
+        d.visual = {
+            {{0.09f, 0.105f, 0.0f}, {0.40f, 0.045f, 0.018f}, blade},     // blade
+            {{0.315f, 0.105f, 0.0f}, {0.07f, 0.03f, 0.015f}, blade},     // tip taper
+            {{-0.125f, 0.105f, 0.0f}, {0.035f, 0.13f, 0.035f}, guardGold}, // crossguard
+            {{-0.20f, 0.105f, 0.0f}, {0.12f, 0.04f, 0.032f}, gripBrown},  // grip
+            {{-0.275f, 0.105f, 0.0f}, {0.04f, 0.055f, 0.04f}, guardGold}, // pommel
         };
         defs_.push_back(d);
     }

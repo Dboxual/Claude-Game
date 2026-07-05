@@ -8,10 +8,15 @@ via a hand-rolled loader on top of `SDL_GL_GetProcAddress`), **GLM** (math),
 This build is the **early sandbox foundation (M3, community-server
 direction)**: on top of the movement prototype you can create and load local
 worlds, spawn objects from a categorized dev menu, pick up and use weapons
-(fists / karambit / Glock), carry light props, and fight a respawning
-training dummy — with placeholder sounds, first-person hands, and weapon &
-entity definitions loaded from data files under `server/content/`. Real
-multiplayer, content packs, and plugins are later phases.
+(fists / karambit / Glock / sword), carry light props, and fight a
+respawning training dummy — with **3D first-person viewmodels** (animated
+hands + held weapon rendered in perspective, not flat sprites), a full set
+of original synthesized sounds (see
+[server/content/sounds/CREDITS.md](server/content/sounds/CREDITS.md)), and
+weapon & entity definitions loaded from data files under `server/content/`.
+Real multiplayer, content packs, and plugins are later phases — what an
+online server list would take is written down in
+[ONLINE_SERVERS.md](ONLINE_SERVERS.md).
 
 ## What's in Milestone 1
 
@@ -99,21 +104,24 @@ see [PORTING.md](PORTING.md)).
 | Q | Toggle the dev spawn menu (in game) |
 | E | Pick up the item you are looking at; carry/drop light props |
 | Left mouse | Attack with the equipped weapon |
-| 1 2 3 | Switch weapon slot |
+| 1 2 3 4 | Switch weapon slot |
 | Esc | In game: pause/resume. In menus: go back a screen |
 | F5 | Hot-reload `config/movement.cfg` |
 | F1 | Toggle debug HUD (saved to settings) |
-| — | CLI flags: `--frames N` (exit after N frames, smoke test), `--novsync`, `--renderer gl\|vulkan\|metal\|gles`, `--world` (skip menu, straight into the test world), `--paused` (start in-world, paused) |
+| — | CLI flags: `--frames N` (exit after N frames, smoke test), `--novsync`, `--renderer gl\|vulkan\|metal\|gles`, `--world` (skip menu, straight into the test world), `--paused` (start in-world, paused), `--equip <weapon id>` (start in-world holding that weapon — viewmodel work) |
 
 ## Main menu, pause menu & settings
 
 The client boots to a **main menu** (over a slow orbit of the arena):
 **Singleplayer** (Start Test World, Create World, Load World),
-**Multiplayer** (a CS-style server-browser shell with **Favorites / LAN /
-History / Direct Connect** tabs — the lists are honestly empty until server
-discovery exists, and Direct Connect's address box reports that the
-connection system is a later milestone; nothing is faked), **Settings**,
-and **Quit**.
+**Multiplayer** (a CS-style server-browser shell with **Online / Favorites /
+LAN / History / Direct Connect** tabs — the Online tab states plainly that
+an online list requires the master server backend described in
+[ONLINE_SERVERS.md](ONLINE_SERVERS.md), the other lists are honestly empty
+until server discovery exists, and Direct Connect's address box reports
+that the connection system is a later milestone; nothing is faked),
+**Settings**, and **Quit**. Every button press plays a small original UI
+click.
 
 In game, Esc pauses: the simulation freezes, the mouse unlocks, and the pause
 menu offers **Resume / Settings / Quit to Menu**. The settings screen is
@@ -153,15 +161,26 @@ front of you; crates and dummies are solid and block movement, weapon
 pickups hover, bob, and are non-solid. Persistent worlds save automatically
 on every spawn and on Quit to Menu.
 
-**Weapons.** You start with fists. Look at a karambit or Glock pickup and
-press **E** — it is added to your inventory (bar at the bottom of the
-screen), auto-equipped, and vanishes from the world until it respawns.
-Switch with **1/2/3**, attack with **left mouse**. Fists and karambit are
-melee (short reach, swing cooldown); the Glock is a semi-auto hitscan
-pistol (unlimited ammo for now). Simple first-person hands and a held-weapon
-viewmodel show what you are holding. The **training dummy** has 100 HP,
-flashes red on hits, shows its health when you aim at it, and respawns 5
-seconds after being destroyed.
+**Weapons.** You start with fists. Look at a karambit, Glock, or sword
+pickup and press **E** — it is added to your inventory (bar at the bottom
+of the screen), auto-equipped, and vanishes from the world until it
+respawns. Switch with **1/2/3/4**, attack with **left mouse**. Fists,
+karambit, and the fantasy sword are melee (the sword trades the slowest
+swing for the longest reach); the Glock is a semi-auto hitscan pistol
+(unlimited ammo for now). The **training dummy** has 100 HP, flashes red on
+hits, shows its health when you aim at it, and respawns 5 seconds after
+being destroyed.
+
+**First-person viewmodels.** The held weapon is drawn as a real 3D model in
+the player's hands — lit, oriented geometry in camera space with its own
+fixed-FOV projection (so world FOV changes never distort it) and a cleared
+depth buffer (so it never clips into walls). Every weapon is animated:
+fists punch, the Glock kicks with an emissive muzzle flash, the karambit
+slashes across the screen, and the sword makes a diagonal cut. On top of
+that: walk bob locked to the footstep cadence, a slow idle breath, and a
+raise animation when switching weapons. Still no art pipeline — every shape
+is composed from boxes by `Game::appendViewmodelDraws` — but the weapons
+read as items held in-hand, not flat sprites.
 
 **Props.** Crates are light enough to carry: press **E** to pick one up, it
 floats in front of you (and stops blocking movement), **E** again drops it
@@ -169,10 +188,14 @@ and it settles onto whatever is below. Barrels are obviously too heavy —
 `carryable` is a plain boolean in the entity definition, not a weight
 system. Props never respawn: destroyed or consumed means gone.
 
-**Sound.** Footsteps, swings, gunshots, pickups, and dummy hits play through
-SDL3 at your master/SFX volume settings. Every sound is an **original
-synthesized placeholder** (pure sine/noise synthesis, no recordings, no
-copyrighted material) living in `server/content/sounds/`.
+**Sound.** Footsteps, melee swings, melee hits, gunshots, bullet impacts,
+pickups, and UI clicks play through SDL3 at your master/SFX volume
+settings. Every sound is **original** — pure sine/noise synthesis by
+[tools/generate_sounds.cpp](tools/generate_sounds.cpp) (no recordings, no
+third-party samples, no game rips), reproducible by re-running the tool —
+and every file is listed with its source and license in
+[server/content/sounds/CREDITS.md](server/content/sounds/CREDITS.md).
+Sounds without a provably safe license are rejected.
 
 ## Content platform (server/)
 
@@ -187,7 +210,7 @@ server/
     │                        #   max_health, respawn_seconds, visual parts
     ├── items/               # reserved (empty)
     ├── maps/                # reserved (worlds are still code-built)
-    └── sounds/*.wav         # original placeholder sounds
+    └── sounds/              # original synthesized WAVs + CREDITS.md (licenses)
 ```
 
 The client loads this folder at startup; a file with the same id as a C++
@@ -250,12 +273,14 @@ guide.
 │   └── server/                  # headless dedicated server (no SDL, no GL)
 │       ├── main.cpp             # CLI entry: --config <path>, --ticks <n>
 │       └── dedicated_server.{h,cpp}  # config, fixed-tick loop, status logs
+├── tools/generate_sounds.cpp    # standalone generator for every shipped sound (CC0)
 ├── run_windows.bat              # one-click build + run client (Windows)
 ├── run_linux.sh                 # build + run client (Linux)
 ├── run_macos.sh                 # build + run client (macOS)
 ├── CMakeLists.txt               # targets: tac_shared, tac_client_*, tacmove, tacmove_server
 ├── CMakePresets.json
 ├── PORTING.md                   # how future platforms slot in
+├── ONLINE_SERVERS.md            # what a real online server list needs (not built)
 ├── vcpkg.json                   # dependencies: sdl3, glm
 └── .github/workflows/build.yml  # CI: Windows x64, Linux x64, macOS arm64
 ```
