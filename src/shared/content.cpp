@@ -104,15 +104,55 @@ void ContentRegistry::registerBuiltins() {
         defs_.push_back(d);
     }
     {
+        // Light wooden crate: solid, carryable, never respawns (props are
+        // gone for good once destroyed/consumed - respawnSeconds stays 0).
         EntityDef d;
         d.id = "crate";
         d.displayName = "Crate";
         d.category = ContentCategory::Prop;
         d.size = {1.00f, 1.00f, 1.00f};
         d.color = {0.85f, 0.55f, 0.25f};
-        d.solid = true; // props are solid and do not respawn
+        d.solid = true;
+        d.carryable = true;
         defs_.push_back(d);
     }
+    {
+        // Heavy metal barrel: solid, NOT carryable, never respawns. Exists
+        // partly to prove the carryable seam has both kinds of prop.
+        EntityDef d;
+        d.id = "barrel";
+        d.displayName = "Barrel";
+        d.category = ContentCategory::Prop;
+        d.size = {0.70f, 1.05f, 0.70f};
+        d.color = {0.36f, 0.42f, 0.48f};
+        d.solid = true;
+        d.visual = {
+            {{0.0f, 0.5f, 0.0f}, {0.66f, 1.00f, 0.66f}, {0.36f, 0.42f, 0.48f}},  // body
+            {{0.0f, 0.25f, 0.0f}, {0.70f, 0.06f, 0.70f}, {0.28f, 0.32f, 0.38f}}, // ring
+            {{0.0f, 0.80f, 0.0f}, {0.70f, 0.06f, 0.70f}, {0.28f, 0.32f, 0.38f}}, // ring
+        };
+        defs_.push_back(d);
+    }
+}
+
+void ContentRegistry::addOrReplace(const EntityDef& def) {
+    for (EntityDef& d : defs_) {
+        if (d.id == def.id) {
+            d = def;
+            return;
+        }
+    }
+    defs_.push_back(def);
+}
+
+void ContentRegistry::addOrReplace(const WeaponDef& def) {
+    for (WeaponDef& d : weapons_) {
+        if (d.id == def.id) {
+            d = def;
+            return;
+        }
+    }
+    weapons_.push_back(def);
 }
 
 const EntityDef* ContentRegistry::find(const std::string& id) const {

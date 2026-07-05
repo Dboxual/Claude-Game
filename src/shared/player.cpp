@@ -137,7 +137,7 @@ void Player::slideMove(const World& world, const glm::vec3& delta, float height)
 
         for (const WorldBox& wb : world.boxes()) clampAgainst(wb.box);
         for (const WorldEntity& e : world.entities()) {
-            if (e.active && e.solid) clampAgainst(e.bounds());
+            if (e.active && e.solid && !e.carried) clampAgainst(e.bounds());
         }
     }
 }

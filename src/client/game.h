@@ -1,5 +1,6 @@
 #pragma once
 
+#include "client/platform/audio.h"
 #include "client/platform/filesystem.h"
 #include "client/platform/input.h"
 #include "client/renderer/render_types.h"
@@ -28,7 +29,8 @@
 //   gameplay -> Q   -> SpawnMenu (dev/admin: spawn pickups/bots/props)
 class Game {
 public:
-    bool init(IFileSystem& fs);
+    // audio may be null (headless tests); sounds become no-ops.
+    bool init(IFileSystem& fs, IAudio* audio = nullptr);
     void update(const InputState& in, double frameDt, int viewportW, int viewportH);
     RenderFrame buildRenderFrame(int viewportW, int viewportH) const;
 
@@ -36,7 +38,7 @@ public:
     // input, quit ends the loop, dirty settings get re-applied.
     bool uiActive() const { return ui_ != UiScreen::None; }
     bool wantsTextInput() const {
-        return ui_ == UiScreen::Multiplayer || ui_ == UiScreen::CreateWorld;
+        return (ui_ == UiScreen::Multiplayer && mpTab_ == 3) || ui_ == UiScreen::CreateWorld;
     }
     bool quitRequested() const { return quitRequested_; }
     const GameSettings& settings() const { return settings_; }
@@ -65,8 +67,8 @@ private:
             StartTestWorld, OpenCreateWorld, OpenLoadWorld, BackToMain,
             // create/load world screens
             ConfirmCreateWorld, LoadWorldEntry, BackToSingleplayer,
-            // multiplayer screen
-            Connect, QuickLocalhost, ServerBrowserSoon,
+            // multiplayer screen (server browser shell)
+            SelectMpTab, Connect, QuickLocalhost,
             // pause menu
             Resume, QuitToMenu,
             // dev spawn menu
@@ -108,15 +110,23 @@ private:
     void updateAimTarget();
     void tryInteract();
     void tryAttack();
+    void updateCarriedProp();
+    void dropCarriedProp();
     void showToast(std::string text);
+    void sfx(const char* soundName) const; // no-op without an audio backend
+
+    void loadContentFiles(); // server/content/ defs replace matching builtins
 
     std::vector<UiButton> buildMenuLayout(int viewportW, int viewportH) const;
     void activateButton(UiButton::Id id, int payload = -1);
     void appendMenuDraws(RenderFrame& frame) const;
     void appendHudDraws(RenderFrame& frame) const;
+    void appendViewmodelDraws(RenderFrame& frame) const;
 
     IFileSystem* fs_ = nullptr;
+    IAudio* audio_ = nullptr;
     std::string cfgPath_;
+    std::string serverRoot_; // "server/" resolved like the config dir
     std::string settingsPath_;
     ConfigFile cfgFile_;
     MovementConfig cfg_;
@@ -138,14 +148,17 @@ private:
     // Combat / interaction state (reset by beginSession).
     Inventory inventory_;
     float attackCooldown_ = 0.0f;   // seconds until the equipped weapon can fire
-    float swingTimer_ = 0.0f;       // placeholder melee-swing feedback
-    float muzzleFlashTimer_ = 0.0f; // placeholder pistol-fire feedback
+    float swingTimer_ = 0.0f;       // melee-swing viewmodel animation
+    float muzzleFlashTimer_ = 0.0f; // pistol-fire viewmodel flash/recoil
     float hitMarkerTimer_ = 0.0f;   // crosshair hit confirmation
+    float footstepDistance_ = 0.0f; // meters walked since the last step sound
+    unsigned carriedEntityId_ = 0;  // world id of the carried prop; 0 = none
     std::string hudToast_;          // transient gameplay message
     double hudToastTimer_ = 0.0;
-    World::EntityHit aimPickup_;    // pickup under the crosshair, in range
+    World::EntityHit aimInteract_;  // pickup/carryable under the crosshair, in range
     World::EntityHit aimInfo_;      // damageable entity under the crosshair
     int spawnCategory_ = 0;         // int(ContentCategory) of the open tab
+    int mpTab_ = 3;                 // server browser tab; 3 = Direct Connect
 
     float yaw_ = 0.0f;
     float pitch_ = 0.0f;

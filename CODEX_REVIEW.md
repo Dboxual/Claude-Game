@@ -1,4 +1,24 @@
-# Codex handoff — Phase 2: spawned things are real
+# Codex handoff — Phase 2 + M3 content platform
+
+**M3 addendum (latest drop)** — on top of everything below, this branch now
+has: data-driven content (`server/content/weapons|entities/*.cfg` parsed by
+`src/shared/content_loader.{h,cpp}`; builtins are fallback, file ids replace
+builtins), `server.cfg` relocated to `server/server.cfg` (old path still
+read), explicit `respawn_seconds` everywhere (props 0/never — crate + new
+barrel; pickups 10 s; dummy 5 s), E-carry/drop for `carryable` props (stable
+`WorldEntity::id` handles, carried props leave collision/rays, drop settles
+downward), real SDL3 audio (8 mixed voices, 5 synthesized original WAVs in
+`server/content/sounds/`, master*sfx gain), a rect-composed first-person
+viewmodel (fists/karambit/glock with swing + recoil), and a CS-style server
+browser shell (Favorites/LAN/History/Direct Connect, honestly empty lists,
+no fake servers). Review focus for M3: the content_loader parse defaults,
+the carried-prop lifecycle (pause/quit/save while carrying), and that the
+server binary intentionally does not read `server/content/` yet.
+`claude_status.txt` lists done/unfinished/broken for this drop.
+
+---
+
+# Phase 2 handoff (previous drop): spawned things are real
 
 Phase 2 turns Phase 1's inert markers into interactive objects: solid props
 that block movement, weapon pickups you grab with E, a working karambit

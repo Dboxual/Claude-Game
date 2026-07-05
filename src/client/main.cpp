@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     eng::logInfo("Renderer backend: %s", renderer->name());
 
     Game game;
-    if (!game.init(*platform.fileSystem)) {
+    if (!game.init(*platform.fileSystem, platform.audio.get())) {
         eng::logError("Game init failed");
         renderer->shutdown();
         destroySdlPlatform(platform);

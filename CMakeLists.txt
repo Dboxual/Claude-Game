@@ -21,6 +21,7 @@ add_library(tac_shared STATIC
     src/shared/log.cpp
     src/shared/config.cpp
     src/shared/content.cpp
+    src/shared/content_loader.cpp
     src/shared/player.cpp
     src/shared/world.cpp
     src/shared/world_save.cpp
@@ -78,8 +79,11 @@ foreach(target tac_shared tac_client_game tac_client_renderer tac_client_platfor
     endif()
 endforeach()
 
-# Ship the config directory (movement tunables + server config) next to the
-# binaries so both find it no matter where they are launched from.
+# Ship the config directory (movement tunables) and the server content
+# platform (server.cfg + content: weapon/entity defs, sounds) next to the
+# binaries so both find them no matter where they are launched from.
 add_custom_command(TARGET tacmove POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:tacmove>/config)
+            ${CMAKE_SOURCE_DIR}/config $<TARGET_FILE_DIR:tacmove>/config
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/server $<TARGET_FILE_DIR:tacmove>/server)

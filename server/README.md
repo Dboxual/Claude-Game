@@ -1,0 +1,42 @@
+# server/ — the content platform root
+
+This folder is what a community server will eventually own and distribute:
+its config plus every piece of game content it serves. The client reads the
+same layout locally today (singleplayer is "your own local server" in
+spirit), which is why the folder ships in the repo.
+
+```
+server/
+├── server.cfg           # dedicated server config: name, max players, tick rate
+└── content/
+    ├── weapons/         # WeaponDef files: id, kind, damage, range, cooldown
+    ├── entities/        # EntityDef files: pickups, bots, props (size/solid/
+    │                    #   carryable/max_health/respawn_seconds/visual parts)
+    ├── items/           # reserved: non-weapon items (nothing here yet)
+    ├── maps/            # reserved: world geometry is still code-built
+    │                    #   (World::buildFlatMap/buildTestMap)
+    └── sounds/          # original synthesized placeholder WAVs (mono 16-bit)
+```
+
+Rules of the format:
+
+- One definition per file, flat `key = value` lines, `#` comments — the same
+  parser as every other TacMove config (`src/shared/content_loader.cpp`).
+- Definitions are looked up by their stable string `id`. World saves store
+  ids only, so editing a definition retunes every world that uses it.
+- The client loads this folder at startup; a definition with the same id as
+  a C++ builtin replaces it. If the folder is missing the builtins keep the
+  game runnable (see `ContentRegistry::registerBuiltins`).
+- `respawn_seconds` is the respawn rule: 0 = never comes back (the default,
+  and the norm for props), >0 = returns that many seconds after being taken
+  (pickups) or destroyed (bots). Placed entities can override it in the
+  world save file.
+- `carryable = 1` marks light props the player can E-carry; heavy or static
+  objects leave it 0. This is deliberately a boolean, not a weight system.
+
+Still hard-coded in C++ (documented seams, not accidents):
+
+- Map geometry (`maps/` is reserved; format not designed yet).
+- The sound-event mapping (which .wav plays on footstep/swing/shot/pickup/
+  hit lives in the client; `sounds/` holds only the assets).
+- The builtin fallback copies of every definition in this folder.

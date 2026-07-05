@@ -1,64 +1,65 @@
-TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05)
-==================================================================
+TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 2)
+============================================================================
 
-This branch contains everything since the last push, uncommitted until now:
-macOS support, the Phase 1 sandbox shell, and the Phase 2 "spawned things
-are real" work. Written by Claude on an Apple Silicon MacBook (M2);
-CODEX_REVIEW.md has the detailed handoff, risky areas, and Phase 3 plan.
+Second drop on this branch: M3 "content platform" alignment on top of the
+Phase 1/2 sandbox. Written by Claude on an Apple Silicon MacBook (M2);
+CODEX_REVIEW.md has the detailed handoff.
 
-DONE (built + tested on macOS arm64, client and server, zero warnings)
-----------------------------------------------------------------------
-- run_macos.sh: one-script build+run on a bare Mac (needs only git + Xcode
-  CLT; bootstraps vcpkg into ~/vcpkg, fetches its own cmake, builds vcpkg's
-  pkgconf when pkg-config is missing). README has the macOS section.
-- Worlds: Create World / Load World screens; worlds/<folder>/world.cfg
-  plain-text saves (v2: entity = <id> x y z <respawn_seconds>; v1 4-field
-  lines still load). Auto-save on every spawn and on Quit to Menu.
-- Dev spawn menu on Q with category tabs (Weapons/Bots/Props/Pickups).
-- Real interactions: solid crates/dummies block movement (this fixed an
-  actual bug - Player::slideMove ignored entities entirely); E-pickup with
-  look-at prompt; pickups respawn (10 s default) or vanish for good.
-- Weapons: fists/karambit (melee) + glock (hitscan, unlimited ammo) with
-  damage/range/cooldown in shared WeaponDef; inventory + slots 1-3; hit
-  marker, muzzle-flash/swing placeholder rects, toasts, weapon bar HUD.
-- Training dummy: 100 HP, red hit flash, aim-at health readout, respawns
-  5 s after death.
-- Placeholder visuals: multi-box "models" (glock reads as a pistol,
-  karambit as a curved claw, dummy has torso/head); pickups hover and bob.
-- Tests run locally (scratch, NOT checked in): unit tests for raycasts/
-  respawn/inventory/save-format, plus a headless integration test that
-  drives the real Game through the menus (spawn -> pickup -> shoot dummy ->
-  respawn -> melee -> crate blocking -> create/save/load world).
+DONE THIS DROP (built + tested on macOS arm64, client and server, no warnings)
+------------------------------------------------------------------------------
+- Content platform: weapon + entity definitions moved OUT of C++ into data
+  files under server/content/ (weapons/*.cfg, entities/*.cfg, one def per
+  file, same key=value format as everything else). The client loads them at
+  startup through shared/content_loader; a file with a builtin's id replaces
+  the builtin, and the C++ builtins remain only as a fallback so the game
+  runs without the folder. Layout documented in server/README.md; items/ and
+  maps/ are reserved-and-empty on purpose.
+- server.cfg moved to server/server.cfg (old config/ path still works);
+  CI artifact staging updated; CMake now copies server/ next to binaries.
+- Respawn rules made explicit and data-visible: respawn_seconds lives in
+  every entity def file and world save line. Props (crate, new barrel) are
+  0 = never; weapon pickups 10 s; dummy 5 s after death. Configurable per
+  placed entity in the world file.
+- Prop carrying: E on a carryable prop picks it up (floats ahead, stops
+  colliding), E drops it and it settles onto whatever is below. carryable
+  is a plain boolean per definition - crate yes, barrel/dummy no. Carried
+  props are tracked by a new stable per-entity id, not a vector index.
+- Audio: real SDL3 playback (device + 8 mixed voices). Five ORIGINAL
+  placeholder sounds - footstep, swing, gunshot, pickup, dummy hit - all
+  synthesized from sine/noise by a script (no recordings, no copyrighted
+  audio), living in server/content/sounds/. Master/SFX volume settings are
+  applied per play; music volume is stored but nothing plays music.
+- Viewmodel: simple first-person hands + held weapon composed from
+  screen-space rects (Doom-style). Fists punch, karambit fist+claw swings,
+  glock has back-of-slide + grip + muzzle flash + recoil kick. Cosmetic
+  only, no art pipeline.
+- Multiplayer: CS-style server browser shell with Favorites / LAN /
+  History / Direct Connect tabs. Direct Connect keeps the address box and
+  honest "connection system not implemented yet" status. The list tabs say
+  plainly that nothing is discoverable yet - no fake servers anywhere.
 
-UNFINISHED (known, deliberate cuts - not hidden)
-------------------------------------------------
-- Pickups tab in the spawn menu is an empty placeholder (no non-weapon
-  pickups exist yet).
-- No ammo/reload; glock is semi-auto unlimited by design this phase.
-- No player health; nothing damages the player yet.
-- Spawn placement is naive (2.5 m ahead at foot height): you can embed a
-  crate in a wall or spawn it overlapping yourself.
-- Pickup interaction ray is only occluded by static geometry - you can
-  grab a pickup through a crate/dummy.
-- Melee is a single center ray (no swing arc); dummy is one AABB (no head
-  hitbox; the visual head is cosmetic).
-- Load World screen caps at 7 worlds, no scrolling, no delete/rename.
-- Content (weapons/entities) is still hard-coded in src/shared/content.cpp;
-  the registry/string-id design is the seam for data-driven files later.
-- worlds/ is gitignored (runtime user data), so no sample world ships in
-  the repo; create one in-game or see README for the file format.
-- Renderer is the existing OpenGL 3.3 backend; Vulkan/Metal/GLES remain
-  compiling stubs. No textures - visuals are colored boxes on purpose.
+UNFINISHED (known, deliberate)
+------------------------------
+- The server binary does not read server/content/ yet (client-only for
+  now); it still only reads server.cfg. Lands with server-side simulation.
+- Sound-event mapping (which wav plays when) is client code, not data.
+- Map geometry is still code-built; server/content/maps/ is reserved.
+- No ammo, no player health, no LAN discovery, no favorites persistence.
+- Carried props can be dropped overlapping the player/walls in odd spots
+  (they settle downward but there is no push-out; nothing gets stuck).
+- Spawn placement still naive (2.5 m ahead); Load World caps at 7 worlds.
+- Viewmodel does not show the carried prop in your "hands" (the prop
+  itself floats in front of the camera instead).
 
 BROKEN / WATCH OUT
 ------------------
-- Nothing known-broken at commit time: client + server build clean and all
-  local tests pass. Two sharp edges for reviewers:
-  1) World entity indices are positional; damageEntity/consumePickup can
-     erase from the vector and invalidate indices (Game re-resolves its
-     cached aim hits each frame - do not hold indices across frames).
-  2) Attack cooldowns/toasts tick per frame while respawns tick on the
-     fixed 128 Hz sim; fine offline, needs a decision before networking.
+- Nothing known-broken: all local test suites pass (unit + a headless
+  integration test that drives the real menus/gameplay: spawn -> pickup ->
+  shoot -> respawn -> melee -> carry/drop -> save/load), plus on-screen
+  client smoke test and server smoke test.
+- Sharp edge for reviewers: WorldEntity now carries a stable `id` next to
+  positional indices. Anything held across frames must use ids (the carry
+  system does); per-frame raycast hits still use indices.
 
 BUILD / RUN
 -----------

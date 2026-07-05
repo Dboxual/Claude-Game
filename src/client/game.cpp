@@ -1,5 +1,6 @@
 #include "client/game.h"
 
+#include "shared/content_loader.h"
 #include "shared/log.h"
 #include "shared/protocol.h"
 #include "shared/world_save.h"
@@ -59,18 +60,36 @@ std::string sanitizeWorldFolder(const std::string& name) {
 
 } // namespace
 
-bool Game::init(IFileSystem& fs) {
+bool Game::init(IFileSystem& fs, IAudio* audio) {
     fs_ = &fs;
+    audio_ = audio;
     content_.registerBuiltins();
 
     const std::string relative = "config/movement.cfg";
     if (fs.exists(relative)) cfgPath_ = relative;
     else if (fs.exists(fs.basePath() + relative)) cfgPath_ = fs.basePath() + relative;
 
-    // Worlds live next to wherever the config directory was found: the repo
-    // root when launched from there, otherwise beside the executable.
+    // Worlds and the server content platform live next to wherever the
+    // config directory was found: the repo root when launched from there,
+    // otherwise beside the executable.
     worldsRoot_ = "worlds/";
-    if (!cfgPath_.empty() && cfgPath_ != relative) worldsRoot_ = fs.basePath() + "worlds/";
+    serverRoot_ = "server/";
+    if (!cfgPath_.empty() && cfgPath_ != relative) {
+        worldsRoot_ = fs.basePath() + "worlds/";
+        serverRoot_ = fs.basePath() + "server/";
+    }
+
+    // Data-driven content: defs from server/content/ replace the builtins.
+    loadContentFiles();
+
+    // Placeholder one-shots (original, synthesized - see content/sounds/).
+    // The event -> sound-name mapping is client code for now by design.
+    if (audio_) {
+        const char* names[] = {"footstep", "swing", "gunshot", "pickup", "dummy_hit"};
+        for (const char* n : names) {
+            audio_->loadSound(n, serverRoot_ + "content/sounds/" + n + ".wav");
+        }
+    }
 
     // Settings live next to the movement config; created on first save.
     if (!cfgPath_.empty()) {
@@ -140,9 +159,11 @@ void Game::beginSession() {
     inventory_.reset("fists");
     attackCooldown_ = 0.0f;
     swingTimer_ = muzzleFlashTimer_ = hitMarkerTimer_ = 0.0f;
+    footstepDistance_ = 0.0f;
+    carriedEntityId_ = 0;
     hudToast_.clear();
     hudToastTimer_ = 0.0;
-    aimPickup_ = {};
+    aimInteract_ = {};
     aimInfo_ = {};
     inGame_ = true;
     ui_ = UiScreen::None;
@@ -235,6 +256,80 @@ void Game::saveCurrentWorld() {
     }
 }
 
+void Game::loadContentFiles() {
+    struct Dir {
+        const char* sub;
+        bool weapons;
+    };
+    const Dir dirs[] = {{"content/weapons/", true}, {"content/entities/", false}};
+    int loaded = 0;
+    for (const Dir& dir : dirs) {
+        std::string path = serverRoot_ + dir.sub;
+        for (const std::string& file : fs_->listDirectory(path)) {
+            if (file.size() < 4 || file.substr(file.size() - 4) != ".cfg") continue;
+            auto text = fs_->readTextFile(path + file);
+            if (!text) continue;
+            bool ok = false;
+            if (dir.weapons) {
+                WeaponDef w;
+                ok = parseWeaponDef(*text, w);
+                if (ok) content_.addOrReplace(w);
+            } else {
+                EntityDef d;
+                ok = parseEntityDef(*text, d);
+                if (ok) content_.addOrReplace(d);
+            }
+            if (ok) ++loaded;
+            else eng::logError("Skipping content file with no usable id: %s%s",
+                               path.c_str(), file.c_str());
+        }
+    }
+    if (loaded > 0) {
+        eng::logInfo("Loaded %d content definitions from %scontent/", loaded,
+                     serverRoot_.c_str());
+    } else {
+        eng::logInfo("No content files found under %scontent/ - using built-in defaults",
+                     serverRoot_.c_str());
+    }
+}
+
+void Game::sfx(const char* soundName) const {
+    if (audio_) audio_->playSound(soundName);
+}
+
+void Game::updateCarriedProp() {
+    if (carriedEntityId_ == 0) return;
+    WorldEntity* e = world_.entityById(carriedEntityId_);
+    if (!e || !e->active) { // destroyed or gone while carried (shouldn't happen)
+        carriedEntityId_ = 0;
+        return;
+    }
+    // Float in front of the eye; the prop is non-colliding while carried.
+    glm::vec3 hold = eyePosition() + lookDirection() * 2.0f;
+    e->pos = hold - glm::vec3(0.0f, e->size.y * 0.5f, 0.0f);
+}
+
+void Game::dropCarriedProp() {
+    if (carriedEntityId_ == 0) return;
+    WorldEntity* e = world_.entityById(carriedEntityId_);
+    carriedEntityId_ = 0;
+    if (!e) return;
+    e->carried = false;
+
+    // Settle onto whatever is below (floor, crate stack); props have no
+    // physics, so without this a drop would leave them hanging mid-air.
+    glm::vec3 from = e->pos + glm::vec3(0.0f, 0.05f, 0.0f);
+    glm::vec3 down(0.0f, -1.0f, 0.0f);
+    float t = world_.raycastGeometry(from, down, 50.0f);
+    World::EntityHit under = world_.raycastEntities(from, down, t, World::RayMask::AttackTargets);
+    if (under.index >= 0) t = under.t;
+    if (t > 0.05f && t < 50.0f) e->pos.y -= (t - 0.05f);
+
+    saveCurrentWorld();
+    sfx("pickup");
+    showToast("DROPPED " + toUpperAscii(e->defId));
+}
+
 void Game::refreshWorldList() {
     worldList_.clear();
     for (const std::string& name : fs_->listDirectory(worldsRoot_)) {
@@ -294,10 +389,10 @@ void Game::updateAimTarget() {
     const glm::vec3 eye = eyePosition();
     const glm::vec3 dir = lookDirection();
 
-    // Walls occlude both the pickup prompt and the target-info readout.
+    // Walls occlude both the interact prompt and the target-info readout.
     float geoT = world_.raycastGeometry(eye, dir, kAimInfoRange);
-    aimPickup_ = world_.raycastEntities(eye, dir, std::min(geoT, kInteractRange),
-                                        World::RayMask::Pickups);
+    aimInteract_ = world_.raycastEntities(eye, dir, std::min(geoT, kInteractRange),
+                                          World::RayMask::Interactables);
     aimInfo_ = world_.raycastEntities(eye, dir, geoT, World::RayMask::AttackTargets);
     if (aimInfo_.index >= 0 &&
         world_.entities()[size_t(aimInfo_.index)].maxHealth <= 0.0f) {
@@ -306,18 +401,39 @@ void Game::updateAimTarget() {
 }
 
 void Game::tryInteract() {
-    if (aimPickup_.index < 0) return;
-    const WorldEntity& e = world_.entities()[size_t(aimPickup_.index)];
-    std::string weaponId = e.weaponId;
-    world_.consumePickup(aimPickup_.index);
-    aimPickup_ = {};
-    aimInfo_ = {}; // indices may have shifted; refreshed next frame
+    // Carrying something: E drops it, whatever is under the crosshair.
+    if (carriedEntityId_ != 0) {
+        dropCarriedProp();
+        return;
+    }
+    if (aimInteract_.index < 0) return;
+    const WorldEntity& e = world_.entities()[size_t(aimInteract_.index)];
 
-    const WeaponDef* weapon = content_.findWeapon(weaponId);
-    const char* name = weapon ? weapon->displayName.c_str() : weaponId.c_str();
-    bool newlyAcquired = inventory_.acquireAndEquip(weaponId);
-    showToast(std::string(newlyAcquired ? "PICKED UP " : "EQUIPPED ") + toUpperAscii(name));
-    eng::logInfo("Picked up weapon '%s'", weaponId.c_str());
+    if (!e.weaponId.empty()) { // weapon pickup
+        std::string weaponId = e.weaponId;
+        world_.consumePickup(aimInteract_.index);
+        aimInteract_ = {};
+        aimInfo_ = {}; // indices may have shifted; refreshed next frame
+
+        const WeaponDef* weapon = content_.findWeapon(weaponId);
+        const char* name = weapon ? weapon->displayName.c_str() : weaponId.c_str();
+        bool newlyAcquired = inventory_.acquireAndEquip(weaponId);
+        showToast(std::string(newlyAcquired ? "PICKED UP " : "EQUIPPED ") + toUpperAscii(name));
+        sfx("pickup");
+        eng::logInfo("Picked up weapon '%s'", weaponId.c_str());
+        return;
+    }
+
+    if (e.carryable) { // light prop: start carrying by stable id
+        WorldEntity* prop = world_.entityById(e.id);
+        if (!prop) return;
+        prop->carried = true;
+        carriedEntityId_ = prop->id;
+        aimInteract_ = {};
+        aimInfo_ = {};
+        sfx("pickup");
+        showToast("CARRYING " + toUpperAscii(prop->defId) + " - E TO DROP");
+    }
 }
 
 void Game::tryAttack() {
@@ -326,8 +442,13 @@ void Game::tryAttack() {
     if (!weapon) return;
 
     attackCooldown_ = weapon->cooldownSeconds;
-    if (weapon->kind == WeaponKind::Hitscan) muzzleFlashTimer_ = 0.07f;
-    else swingTimer_ = 0.18f;
+    if (weapon->kind == WeaponKind::Hitscan) {
+        muzzleFlashTimer_ = 0.07f;
+        sfx("gunshot");
+    } else {
+        swingTimer_ = 0.18f;
+        sfx("swing");
+    }
 
     const glm::vec3 eye = eyePosition();
     const glm::vec3 dir = lookDirection();
@@ -341,8 +462,9 @@ void Game::tryAttack() {
 
     std::string targetId = target.defId;
     hitMarkerTimer_ = 0.12f;
+    sfx("dummy_hit");
     bool destroyed = world_.damageEntity(hit.index, weapon->damage);
-    aimPickup_ = {};
+    aimInteract_ = {};
     aimInfo_ = {}; // entity vector may have shifted; refreshed next frame
     if (destroyed) {
         const EntityDef* def = content_.find(targetId);
@@ -479,6 +601,17 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
         prevPos_ = player_.pos;
         player_.tick(pin, world_, cfg_, float(tickDt_));
         world_.tick(float(tickDt_)); // entity respawns + hit-flash decay
+
+        // Footsteps: distance-based cadence, so walking naturally slows the
+        // rhythm and standing still is silent.
+        if (player_.grounded) {
+            footstepDistance_ += player_.horizontalSpeed() * float(tickDt_);
+            if (footstepDistance_ >= 2.1f) {
+                footstepDistance_ = 0.0f;
+                if (player_.horizontalSpeed() > 0.5f) sfx("footstep");
+            }
+        }
+
         if (player_.justJumped) jumpBufferTimer_ = -1.0;
         jumpBufferTimer_ -= tickDt_;
         accumulator_ -= tickDt_;
@@ -495,6 +628,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - float(frameDt));
     if (hudToastTimer_ > 0.0) hudToastTimer_ -= frameDt;
 
+    updateCarriedProp(); // held prop follows the camera
     updateAimTarget();
     if (in.slotPressed > 0) inventory_.selectSlot(in.slotPressed - 1);
     if (in.interactPressed) tryInteract();
@@ -532,16 +666,20 @@ void Game::activateButton(UiButton::Id id, int payload) {
     case Id::LoadWorldEntry: loadWorld(payload); break;
 
     // Multiplayer (networking is a later milestone; protocol.h reserves v1).
+    case Id::SelectMpTab:
+        mpTab_ = payload;
+        menuStatus_.clear();
+        break;
     case Id::Connect:
     case Id::QuickLocalhost:
         if (id == Id::QuickLocalhost) serverAddress_ = "127.0.0.1:27015";
         menuStatus_ = "CONNECTION SYSTEM NOT IMPLEMENTED YET - NETWORKING IS A LATER MILESTONE";
         break;
-    case Id::ServerBrowserSoon: break; // disabled
 
     // Pause menu.
     case Id::Resume: ui_ = UiScreen::None; break;
     case Id::QuitToMenu:
+        dropCarriedProp(); // settle + persist a held prop before leaving
         saveCurrentWorld();
         currentWorldFile_.clear();
         inGame_ = false;
@@ -663,14 +801,33 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         break;
     }
 
-    case UiScreen::Multiplayer:
-        column(viewportH * 0.40f, {
-            {Id::Connect, 0, 0, 0, 0, "CONNECT", true},
-            {Id::QuickLocalhost, 0, 0, 0, 0, "LOCALHOST 127.0.0.1", true},
-            {Id::ServerBrowserSoon, 0, 0, 0, 0, "SERVER BROWSER (COMING SOON)", false},
-            {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
-        });
+    case UiScreen::Multiplayer: {
+        // CS-style server browser shell. The tabs are real; the lists are
+        // honestly empty until server discovery exists (no fake servers).
+        static const char* kMpTabs[] = {"FAVORITES", "LAN", "HISTORY", "DIRECT CONNECT"};
+        constexpr int kMpTabCount = 4;
+        const float tabW = 170.0f, tabH = 40.0f, tabGap = 10.0f;
+        float tabX = cx - (kMpTabCount * tabW + (kMpTabCount - 1) * tabGap) / 2;
+        const float tabY = viewportH * 0.22f;
+        for (int i = 0; i < kMpTabCount; ++i) {
+            buttons.push_back({Id::SelectMpTab, tabX, tabY, tabW, tabH,
+                               kMpTabs[i], true, i, i == mpTab_});
+            tabX += tabW + tabGap;
+        }
+
+        if (mpTab_ == 3) { // Direct Connect: address box + actions
+            column(viewportH * 0.46f, {
+                {Id::Connect, 0, 0, 0, 0, "CONNECT", true},
+                {Id::QuickLocalhost, 0, 0, 0, 0, "LOCALHOST 127.0.0.1", true},
+                {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
+            });
+        } else {
+            column(viewportH * 0.62f, {
+                {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
+            });
+        }
         break;
+    }
 
     case UiScreen::PauseMain:
         column(viewportH * 0.40f, {
@@ -891,29 +1048,29 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         }
     }
 
-    // Placeholder attack feedback near the "hands": a muzzle flash for the
-    // pistol, a rising slash block for melee. Real viewmodels are cosmetic
-    // work for a later phase.
-    if (muzzleFlashTimer_ > 0.0f) {
-        frame.rects.push_back({cx + 48.0f, viewportH - 170.0f, 30.0f, 30.0f,
-                               glm::vec4(1.0f, 0.85f, 0.3f, 0.9f)});
-        frame.rects.push_back({cx + 56.0f, viewportH - 162.0f, 14.0f, 14.0f,
-                               glm::vec4(1.0f, 1.0f, 0.8f, 0.95f)});
-    }
-    if (swingTimer_ > 0.0f) {
-        float lift = (0.18f - swingTimer_) / 0.18f * 90.0f;
-        frame.rects.push_back({cx + 60.0f, viewportH - 120.0f - lift, 46.0f, 12.0f,
-                               glm::vec4(0.85f, 0.88f, 0.92f, 0.85f)});
-    }
+    // First-person hands + held weapon (simple shapes; no art pipeline yet).
+    appendViewmodelDraws(frame);
 
     // Interaction prompt / target readout under the crosshair.
     char info[128];
-    if (aimPickup_.index >= 0) {
-        const WorldEntity& e = world_.entities()[size_t(aimPickup_.index)];
-        const WeaponDef* w = content_.findWeapon(e.weaponId);
-        std::snprintf(info, sizeof(info), "PRESS E TO PICK UP %s",
-                      toUpperAscii(w ? w->displayName : e.weaponId).c_str());
-        centeredLine(viewportH * 0.5f + 34.0f, 2.0f, glm::vec4(1.0f, 0.9f, 0.5f, 1.0f), info);
+    const glm::vec4 promptGold(1.0f, 0.9f, 0.5f, 1.0f);
+    if (carriedEntityId_ != 0) {
+        const WorldEntity* held = world_.entityById(carriedEntityId_);
+        std::snprintf(info, sizeof(info), "CARRYING %s - PRESS E TO DROP",
+                      toUpperAscii(held ? held->defId : "PROP").c_str());
+        centeredLine(viewportH * 0.5f + 34.0f, 2.0f, promptGold, info);
+    } else if (aimInteract_.index >= 0) {
+        const WorldEntity& e = world_.entities()[size_t(aimInteract_.index)];
+        if (!e.weaponId.empty()) {
+            const WeaponDef* w = content_.findWeapon(e.weaponId);
+            std::snprintf(info, sizeof(info), "PRESS E TO PICK UP %s",
+                          toUpperAscii(w ? w->displayName : e.weaponId).c_str());
+        } else {
+            const EntityDef* def = content_.find(e.defId);
+            std::snprintf(info, sizeof(info), "PRESS E TO CARRY %s",
+                          toUpperAscii(def ? def->displayName : e.defId).c_str());
+        }
+        centeredLine(viewportH * 0.5f + 34.0f, 2.0f, promptGold, info);
     } else if (aimInfo_.index >= 0) {
         const WorldEntity& e = world_.entities()[size_t(aimInfo_.index)];
         const EntityDef* def = content_.find(e.defId);
@@ -939,6 +1096,69 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         bar += (eq ? "[" : "") + std::to_string(i + 1) + " " + name + (eq ? "]" : "");
     }
     centeredLine(viewportH - 46.0f, 2.0f, white, bar);
+}
+
+// First-person hands + held weapon, composed from screen-space rects
+// (Doom-style, anchored at the bottom edge). Purely cosmetic placeholder:
+// no art pipeline, no rotation - just enough that fists read as fists, the
+// karambit as a claw in a fist, and the glock as a pistol you sight over.
+void Game::appendViewmodelDraws(RenderFrame& frame) const {
+    const float vw = float(frame.viewportW);
+    const float vh = float(frame.viewportH);
+    const float cx = vw * 0.5f;
+
+    const glm::vec4 skin(0.85f, 0.66f, 0.52f, 1.0f);
+    const glm::vec4 sleeve(0.24f, 0.28f, 0.34f, 1.0f);
+    const glm::vec4 metal(0.14f, 0.15f, 0.18f, 1.0f);
+    const glm::vec4 metalLight(0.26f, 0.28f, 0.32f, 1.0f);
+    const glm::vec4 silver(0.80f, 0.84f, 0.90f, 1.0f);
+
+    // Swing animation: 0 -> 1 over the melee cooldown flash, arcing up-left.
+    float swing = swingTimer_ > 0.0f ? 1.0f - swingTimer_ / 0.18f : 0.0f;
+    float arc = std::sin(swing * 3.14159f);
+    // Pistol recoil kick, decaying with the muzzle flash.
+    float kick = muzzleFlashTimer_ > 0.0f ? muzzleFlashTimer_ / 0.07f : 0.0f;
+
+    auto rect = [&](float x, float y, float w, float h, const glm::vec4& c) {
+        frame.rects.push_back({x, y, w, h, c});
+    };
+
+    const std::string& weapon = inventory_.equippedId();
+    if (weapon == "glock") {
+        float gx = cx + 70.0f;          // gun center x
+        float gy = vh - 168.0f + kick * 12.0f;
+        // Hands gripping from both sides, forearms running off-screen.
+        rect(gx - 52.0f, gy + 64.0f, 44.0f, 60.0f, skin);
+        rect(gx + 8.0f, gy + 64.0f, 44.0f, 60.0f, skin);
+        rect(gx - 60.0f, gy + 118.0f, 56.0f, vh, sleeve);
+        rect(gx + 4.0f, gy + 118.0f, 56.0f, vh, sleeve);
+        // Grip and back of the slide (what you see when sighting a pistol).
+        rect(gx - 20.0f, gy + 36.0f, 40.0f, 44.0f, metalLight);
+        rect(gx - 26.0f, gy, 52.0f, 40.0f, metal);
+        rect(gx - 4.0f, gy - 8.0f, 8.0f, 10.0f, metalLight); // rear sight
+        if (muzzleFlashTimer_ > 0.0f) {
+            rect(gx - 16.0f, gy - 42.0f, 32.0f, 30.0f, {1.0f, 0.85f, 0.30f, 0.9f});
+            rect(gx - 7.0f, gy - 34.0f, 14.0f, 16.0f, {1.0f, 1.0f, 0.80f, 0.95f});
+        }
+    } else if (weapon == "karambit") {
+        // Right fist holding the claw; the whole cluster arcs on a swing.
+        float fx = cx + 150.0f - arc * 90.0f;
+        float fy = vh - 120.0f - arc * 110.0f;
+        rect(fx, fy, 62.0f, 62.0f, skin);
+        rect(fx + 4.0f, fy + 56.0f, 54.0f, vh, sleeve);
+        rect(fx + 14.0f, fy - 10.0f, 18.0f, 14.0f, silver);  // finger ring
+        rect(fx - 34.0f, fy + 10.0f, 36.0f, 13.0f, silver);  // blade root
+        rect(fx - 58.0f, fy + 20.0f, 28.0f, 11.0f, silver);  // blade mid
+        rect(fx - 74.0f, fy + 32.0f, 20.0f, 9.0f, silver);   // curving tip
+    } else { // fists (and any unknown weapon id)
+        float lx = cx - 210.0f;
+        float rx = cx + 148.0f - arc * 110.0f; // right fist throws the punch
+        float ry = vh - 104.0f - arc * 130.0f;
+        rect(lx, vh - 104.0f, 62.0f, 62.0f, skin);
+        rect(lx + 4.0f, vh - 48.0f, 54.0f, vh, sleeve);
+        rect(rx, ry, 62.0f, 62.0f, skin);
+        rect(rx + 4.0f, ry + 56.0f, 54.0f, vh, sleeve);
+    }
 }
 
 void Game::appendMenuDraws(RenderFrame& frame) const {
@@ -1035,27 +1255,49 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         centeredText(cx, viewportH * 0.88f, 2.0f, notice, menuStatus_);
     }
 
-    // Multiplayer: server-address input box (always focused on this screen).
+    // Multiplayer: tab body. Direct Connect has the address box; the list
+    // tabs state plainly that nothing is discoverable yet - no fake servers.
     if (ui_ == UiScreen::Multiplayer) {
-        float boxX = cx - kAddressBoxW / 2;
-        float boxY = viewportH * 0.26f;
-        centeredText(cx, boxY - 26.0f, 2.0f, label, "SERVER ADDRESS");
-        frame.rects.push_back({boxX, boxY, kAddressBoxW, kAddressBoxH,
-                               glm::vec4(0.10f, 0.12f, 0.16f, 0.95f)});
-        frame.rects.push_back({boxX, boxY + kAddressBoxH - 3.0f, kAddressBoxW, 3.0f,
-                               glm::vec4(0.45f, 0.55f, 0.70f, 1.0f)}); // underline accent
-        std::string shown = serverAddress_;
-        if (std::fmod(menuTime_, 1.0) < 0.55) shown += "_"; // blinking caret
-        TextDraw addr;
-        addr.x = boxX + 12.0f;
-        addr.y = boxY + (kAddressBoxH - 14.0f) / 2;
-        addr.scale = 2.0f;
-        addr.color = white;
-        addr.text = std::move(shown);
-        frame.texts.push_back(std::move(addr));
+        if (mpTab_ == 3) {
+            float boxX = cx - kAddressBoxW / 2;
+            float boxY = viewportH * 0.32f;
+            centeredText(cx, boxY - 26.0f, 2.0f, label, "SERVER ADDRESS");
+            frame.rects.push_back({boxX, boxY, kAddressBoxW, kAddressBoxH,
+                                   glm::vec4(0.10f, 0.12f, 0.16f, 0.95f)});
+            frame.rects.push_back({boxX, boxY + kAddressBoxH - 3.0f, kAddressBoxW, 3.0f,
+                                   glm::vec4(0.45f, 0.55f, 0.70f, 1.0f)}); // underline accent
+            std::string shown = serverAddress_;
+            if (std::fmod(menuTime_, 1.0) < 0.55) shown += "_"; // blinking caret
+            TextDraw addr;
+            addr.x = boxX + 12.0f;
+            addr.y = boxY + (kAddressBoxH - 14.0f) / 2;
+            addr.scale = 2.0f;
+            addr.color = white;
+            addr.text = std::move(shown);
+            frame.texts.push_back(std::move(addr));
+        } else {
+            const char* line1 = "";
+            const char* line2 = "";
+            switch (mpTab_) {
+            case 0:
+                line1 = "NO FAVORITES YET";
+                line2 = "SERVERS CAN BE FAVORITED ONCE JOINING THEM EXISTS";
+                break;
+            case 1:
+                line1 = "NO SERVERS FOUND";
+                line2 = "LAN DISCOVERY IS NOT IMPLEMENTED YET";
+                break;
+            default:
+                line1 = "NO HISTORY";
+                line2 = "PAST CONNECTIONS WILL SHOW UP HERE";
+                break;
+            }
+            centeredText(cx, viewportH * 0.40f, 2.5f, dimText, line1);
+            centeredText(cx, viewportH * 0.40f + 30.0f, 2.0f, dimText, line2);
+        }
 
         if (!menuStatus_.empty()) {
-            centeredText(cx, viewportH * 0.40f + 4 * kBtnGap + 10.0f, 2.0f, notice, menuStatus_);
+            centeredText(cx, viewportH * 0.85f, 2.0f, notice, menuStatus_);
         }
     }
 

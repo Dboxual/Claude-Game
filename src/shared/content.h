@@ -6,12 +6,14 @@
 #include <vector>
 
 // Base game content: entity definitions the sandbox can spawn (weapon
-// pickups, bots, props) and the weapons the player can hold. Phase 2 still
-// hard-codes the built-in set in registerBuiltins(); the registry is the
-// seam where data-driven content lands later (content packs register extra
-// defs at startup). Gameplay and world files only ever reference defs by
-// their stable string id, so moving definitions from C++ to content files
-// does not touch world saves or spawn code.
+// pickups, bots, props) and the weapons the player can hold.
+//
+// Content now primarily lives in data files under server/content/
+// (weapons/*.cfg, entities/*.cfg - parsed by shared/content_loader).
+// registerBuiltins() keeps a matching hard-coded fallback set so the game
+// still runs if the content folder is missing; files with the same id
+// replace the builtin. Gameplay and world saves only ever reference defs by
+// their stable string id, so where a definition comes from never matters.
 
 enum class ContentCategory { Weapon, Bot, Prop, Pickup };
 
@@ -51,9 +53,15 @@ struct EntityDef {
     bool solid = false;      // solid entities join world collision
     bool spawnable = true;   // listed in the dev spawn menu
 
-    std::string weaponId;        // non-empty = pickup granting this weapon
-    float maxHealth = 0.0f;      // >0 = damageable (training dummy)
-    float respawnSeconds = 0.0f; // default respawn after pickup/death; 0 = never
+    std::string weaponId;   // non-empty = pickup granting this weapon
+    float maxHealth = 0.0f; // >0 = damageable (training dummy)
+    bool carryable = false; // light props can be E-carried; heavy/static cannot
+
+    // Respawn rule, stated once here and honored everywhere: after this many
+    // seconds a taken pickup / destroyed bot comes back at its spawn point.
+    // 0 = never (props like crates/barrels default to 0 - destroyed or
+    // consumed means gone). World saves can override per placed entity.
+    float respawnSeconds = 0.0f;
 
     std::vector<VisualPart> visual; // multi-box visual; empty = one size/color box
 };
@@ -61,6 +69,10 @@ struct EntityDef {
 class ContentRegistry {
 public:
     void registerBuiltins();
+
+    // Data-file defs land through these; same id replaces (file beats builtin).
+    void addOrReplace(const EntityDef& def);
+    void addOrReplace(const WeaponDef& def);
 
     const EntityDef* find(const std::string& id) const;
     const std::vector<EntityDef>& defs() const { return defs_; }

@@ -5,11 +5,13 @@ No game engine — just **SDL3** (window/input), **OpenGL 3.3 core** (rendering,
 via a hand-rolled loader on top of `SDL_GL_GetProcAddress`), **GLM** (math),
 **CMake** + **vcpkg** (build/dependencies).
 
-This build is the **early sandbox foundation (Phase 2)**: on top of the
-movement prototype you can create and load local worlds, spawn objects from
-a categorized dev menu, pick up and use weapons (fists / karambit / Glock),
-and fight a respawning training dummy. Multiplayer, content packs, and
-plugins are later phases.
+This build is the **early sandbox foundation (M3, community-server
+direction)**: on top of the movement prototype you can create and load local
+worlds, spawn objects from a categorized dev menu, pick up and use weapons
+(fists / karambit / Glock), carry light props, and fight a respawning
+training dummy — with placeholder sounds, first-person hands, and weapon &
+entity definitions loaded from data files under `server/content/`. Real
+multiplayer, content packs, and plugins are later phases.
 
 ## What's in Milestone 1
 
@@ -95,7 +97,7 @@ see [PORTING.md](PORTING.md)).
 | Left Ctrl or C | Crouch (hold) |
 | Left Shift | Walk (hold) |
 | Q | Toggle the dev spawn menu (in game) |
-| E | Pick up the item you are looking at |
+| E | Pick up the item you are looking at; carry/drop light props |
 | Left mouse | Attack with the equipped weapon |
 | 1 2 3 | Switch weapon slot |
 | Esc | In game: pause/resume. In menus: go back a screen |
@@ -107,9 +109,10 @@ see [PORTING.md](PORTING.md)).
 
 The client boots to a **main menu** (over a slow orbit of the arena):
 **Singleplayer** (Start Test World, Create World, Load World),
-**Multiplayer** (server-address field with typing, Connect and Localhost
-quick-connect buttons — both report that the connection system is a later
-milestone; Server Browser is a disabled coming-soon slot), **Settings**,
+**Multiplayer** (a CS-style server-browser shell with **Favorites / LAN /
+History / Direct Connect** tabs — the lists are honestly empty until server
+discovery exists, and Direct Connect's address box reports that the
+connection system is a later milestone; nothing is faked), **Settings**,
 and **Quit**.
 
 In game, Esc pauses: the simulation freezes, the mouse unlocks, and the pause
@@ -155,16 +158,45 @@ press **E** — it is added to your inventory (bar at the bottom of the
 screen), auto-equipped, and vanishes from the world until it respawns.
 Switch with **1/2/3**, attack with **left mouse**. Fists and karambit are
 melee (short reach, swing cooldown); the Glock is a semi-auto hitscan
-pistol (unlimited ammo for now). The **training dummy** has 100 HP, flashes
-red on hits, shows its health when you aim at it, and respawns 5 seconds
-after being destroyed.
+pistol (unlimited ammo for now). Simple first-person hands and a held-weapon
+viewmodel show what you are holding. The **training dummy** has 100 HP,
+flashes red on hits, shows its health when you aim at it, and respawns 5
+seconds after being destroyed.
 
-All of it is data in `src/shared/content.cpp`: `WeaponDef` holds combat
-stats (damage/range/cooldown — deliberately knife-tier numbers, skins stay
-cosmetic), `EntityDef` holds world objects (size, solidity, health, respawn,
-multi-box placeholder visuals). World files reference string ids only, so
-definitions can move from C++ to data-driven content files in a later phase
-without touching saves.
+**Props.** Crates are light enough to carry: press **E** to pick one up, it
+floats in front of you (and stops blocking movement), **E** again drops it
+and it settles onto whatever is below. Barrels are obviously too heavy —
+`carryable` is a plain boolean in the entity definition, not a weight
+system. Props never respawn: destroyed or consumed means gone.
+
+**Sound.** Footsteps, swings, gunshots, pickups, and dummy hits play through
+SDL3 at your master/SFX volume settings. Every sound is an **original
+synthesized placeholder** (pure sine/noise synthesis, no recordings, no
+copyrighted material) living in `server/content/sounds/`.
+
+## Content platform (server/)
+
+Weapon and entity definitions live in **data files**, not C++:
+
+```
+server/
+├── server.cfg               # dedicated server config
+└── content/
+    ├── weapons/*.cfg        # id, kind, damage, range, cooldown
+    ├── entities/*.cfg       # size, color, solid, carryable, weapon,
+    │                        #   max_health, respawn_seconds, visual parts
+    ├── items/               # reserved (empty)
+    ├── maps/                # reserved (worlds are still code-built)
+    └── sounds/*.wav         # original placeholder sounds
+```
+
+The client loads this folder at startup; a file with the same id as a C++
+builtin replaces it (edit `server/content/weapons/glock.cfg`, restart, and
+the pistol hits differently). The builtins in `src/shared/content.cpp` are
+a fallback so the game runs even without the folder. World saves reference
+string ids only, so retuning content never breaks worlds. See
+[server/README.md](server/README.md) for the format and what is still
+hard-coded (map geometry, the sound-event mapping).
 
 ## Tuning the movement
 
@@ -194,13 +226,15 @@ guide.
 ```
 ├── config/movement.cfg          # movement physics tunables (F5 hot-reload, shared)
 ├── config/settings.cfg          # client user settings, written by the pause menu (auto-created)
-├── config/server.cfg            # dedicated server config: name, max players, tick rate
+├── server/                      # content platform: server.cfg + content/ (see server/README.md)
+│   └── content/                 # weapons/, entities/, sounds/, items/, maps/
 ├── worlds/<name>/world.cfg      # sandbox world saves (created in game, gitignored)
 ├── src/
 │   ├── shared/                  # compiled into BOTH client and server (std + glm only)
 │   │   ├── player.{h,cpp}       # movement controller (accel/friction/air/jump/crouch)
 │   │   ├── world.{h,cpp}        # AABB world + entities: raycasts, damage, respawns
-│   │   ├── content.{h,cpp}      # weapon stats + entity defs (karambit/glock/dummy/crate)
+│   │   ├── content.{h,cpp}      # registry + builtin fallback defs
+│   │   ├── content_loader.{h,cpp} # parses server/content weapon/entity files
 │   │   ├── inventory.h          # owned weapons + equipped slot (plain data)
 │   │   ├── world_save.{h,cpp}   # world file format: serialize/parse (string <-> struct)
 │   │   ├── config.{h,cpp}       # key=value parser + movement constants
@@ -238,23 +272,25 @@ build\Release\tacmove_server.exe            (Windows)
 ./build/tacmove_server                      (Linux/macOS)
 
 # options:
-tacmove_server --config path/to/server.cfg  # default: config/server.cfg
+tacmove_server --config path/to/server.cfg  # default: server/server.cfg
 tacmove_server --ticks 384                  # exit after N ticks (smoke test)
 ```
 
 The server runs without graphics, prints timestamped console logs (startup
 banner, 10-second status lines, clean Ctrl+C shutdown), and reads
-[config/server.cfg](config/server.cfg): `server_name`, `max_players`,
-`tick_rate`. It builds the same shared world and movement constants as the
+[server/server.cfg](server/server.cfg): `server_name`, `max_players`,
+`tick_rate` (the old `config/server.cfg` location still works as a
+fallback). It builds the same shared world and movement constants as the
 client, so server-side player simulation drops in when networking lands
 (`src/shared/protocol.h` reserves the version handshake).
 
-**Where the ecosystem grows from here:** custom maps become data files loaded
-by `shared/world` (both sides load identical geometry); custom items, game
-modes, and mods become content definitions in `shared/` consumed by client
-and server alike; community servers configure themselves through
-`server.cfg`. None of that exists yet — this milestone is only the clean
-split.
+**Where the ecosystem grows from here:** custom items, weapons, and props
+are already content definitions under `server/content/` consumed through
+the shared registry; custom maps become data files loaded by `shared/world`
+(both sides load identical geometry — still code-built today); game modes
+and mods become more content kinds in the same layout; community servers
+configure themselves through `server/server.cfg`. The server does not read
+the content folder yet — that lands with server-side simulation.
 
 ## Building by hand
 

@@ -38,12 +38,15 @@ struct WorldEntity {
     glm::vec3 size{1.0f};
     glm::vec3 color{1.0f};
     bool solid = false;
+    bool carryable = false;      // light prop the player may E-carry
     std::string weaponId;        // non-empty = pickup granting this weapon
     float maxHealth = 0.0f;      // >0 = damageable
     float respawnSeconds = 0.0f; // 0 = never respawns (consumed/destroyed for good)
 
     // Runtime.
+    unsigned id = 0;         // stable per-world handle (indices shift on erase)
     bool active = true;      // false = picked up / destroyed, waiting to respawn
+    bool carried = false;    // held by the player: no collision, no ray hits
     float health = 0.0f;
     float respawnTimer = 0.0f;
     float hitFlash = 0.0f;   // seconds of red flash left after taking a hit
@@ -72,16 +75,22 @@ public:
     // Nearest static-geometry hit within maxT, or maxT if the ray is clear.
     float raycastGeometry(const glm::vec3& origin, const glm::vec3& dir, float maxT) const;
 
-    // Nearest active entity the ray hits within maxT. AttackTargets sees
-    // solid or damageable entities (bullets pass through pickups); Pickups
-    // sees only weapon pickups. Callers occlude with raycastGeometry first.
-    enum class RayMask { AttackTargets, Pickups };
+    // Nearest active, non-carried entity the ray hits within maxT.
+    // AttackTargets sees solid or damageable entities (bullets pass through
+    // pickups); Interactables sees weapon pickups and carryable props.
+    // Callers occlude with raycastGeometry first.
+    enum class RayMask { AttackTargets, Interactables };
     struct EntityHit {
         int index = -1;
         float t = 0.0f;
     };
     EntityHit raycastEntities(const glm::vec3& origin, const glm::vec3& dir,
                               float maxT, RayMask mask) const;
+
+    // Stable-handle lookup; nullptr once the entity was erased. Prefer ids
+    // over indices for anything held across frames (e.g. a carried prop).
+    const WorldEntity* entityById(unsigned id) const;
+    WorldEntity* entityById(unsigned id);
 
     // Applies damage; true if this hit destroyed the entity. Entities with
     // respawnSeconds == 0 are erased outright, so the index (and any
@@ -98,4 +107,5 @@ private:
     void add(glm::vec3 min, glm::vec3 max, glm::vec3 color, bool checkerTop = false);
     std::vector<WorldBox> boxes_;
     std::vector<WorldEntity> entities_;
+    unsigned nextEntityId_ = 1;
 };

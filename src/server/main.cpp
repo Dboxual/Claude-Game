@@ -12,10 +12,17 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 
 int main(int argc, char** argv) {
-    std::string configPath = "config/server.cfg";
+    // The config moved into the server content-platform root (server/);
+    // the old config/ location still works for existing setups.
+    std::string configPath = "server/server.cfg";
+    {
+        std::ifstream probe(configPath);
+        if (!probe.good()) configPath = "config/server.cfg";
+    }
     long long maxTicks = -1;
 
     for (int i = 1; i < argc; ++i) {

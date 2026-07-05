@@ -31,7 +31,7 @@ bool World::overlapsAny(const AABB& box) const {
         if (aabbOverlap(box, wb.box)) return true;
     }
     for (const WorldEntity& e : entities_) {
-        if (e.active && e.solid && aabbOverlap(box, e.bounds())) return true;
+        if (e.active && e.solid && !e.carried && aabbOverlap(box, e.bounds())) return true;
     }
     return false;
 }
@@ -43,11 +43,27 @@ void World::addEntity(const EntityDef& def, const glm::vec3& pos, float respawnO
     e.size = def.size;
     e.color = def.color;
     e.solid = def.solid;
+    e.carryable = def.carryable;
     e.weaponId = def.weaponId;
     e.maxHealth = def.maxHealth;
     e.respawnSeconds = respawnOverride >= 0.0f ? respawnOverride : def.respawnSeconds;
+    e.id = nextEntityId_++;
     e.health = def.maxHealth;
     entities_.push_back(std::move(e));
+}
+
+const WorldEntity* World::entityById(unsigned id) const {
+    for (const WorldEntity& e : entities_) {
+        if (e.id == id) return &e;
+    }
+    return nullptr;
+}
+
+WorldEntity* World::entityById(unsigned id) {
+    for (WorldEntity& e : entities_) {
+        if (e.id == id) return &e;
+    }
+    return nullptr;
 }
 
 void World::tick(float dt) {
@@ -79,9 +95,9 @@ World::EntityHit World::raycastEntities(const glm::vec3& origin, const glm::vec3
     float nearest = maxT;
     for (size_t i = 0; i < entities_.size(); ++i) {
         const WorldEntity& e = entities_[i];
-        if (!e.active) continue;
-        if (mask == RayMask::Pickups) {
-            if (e.weaponId.empty()) continue;
+        if (!e.active || e.carried) continue;
+        if (mask == RayMask::Interactables) {
+            if (e.weaponId.empty() && !e.carryable) continue;
         } else { // AttackTargets: bullets pass through non-solid pickups
             if (!e.solid && e.maxHealth <= 0.0f) continue;
         }
