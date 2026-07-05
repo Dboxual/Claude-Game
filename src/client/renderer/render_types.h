@@ -16,15 +16,18 @@ struct BoxDraw {
     bool checkerTop = false;
 };
 
-// Oriented box in CAMERA space (+X right, +Y up, -Z forward) for the
-// first-person viewmodel. Backends draw these after the world with the
-// depth buffer cleared and view = identity, projected through
-// RenderFrame::viewmodelProj - so the held weapon never clips into walls
-// and keeps its size regardless of the world FOV setting.
+// Oriented box with a full model matrix. Used two ways:
+//  - RenderFrame::orientedBoxes: WORLD space, drawn with the world view/proj
+//    right after the axis-aligned boxes (bot weapon telegraphs, thrown
+//    weapons spinning through the air, spark particles).
+//  - RenderFrame::viewmodelBoxes: CAMERA space (+X right, +Y up, -Z forward),
+//    drawn after the world with the depth buffer cleared and view = identity
+//    through RenderFrame::viewmodelProj - so the held weapon never clips
+//    into walls and keeps its size regardless of the world FOV setting.
 struct ViewmodelBoxDraw {
     glm::mat4 transform{1.0f}; // full model matrix (translate*rotate*scale)
     glm::vec3 color{1.0f};
-    float emissive = 0.0f; // 1 = unlit/full-bright (muzzle flash)
+    float emissive = 0.0f; // 1 = unlit/full-bright (muzzle flash, sparks)
 };
 
 struct TextDraw {
@@ -52,6 +55,7 @@ struct RenderFrame {
     int viewportW = 0;
     int viewportH = 0;
     std::vector<BoxDraw> boxes;
+    std::vector<ViewmodelBoxDraw> orientedBoxes; // world-space rotated boxes (fx, telegraphs)
     std::vector<ViewmodelBoxDraw> viewmodelBoxes; // first-person hands/weapon
     std::vector<RectDraw> rects; // drawn after the world, before texts
     std::vector<TextDraw> texts;

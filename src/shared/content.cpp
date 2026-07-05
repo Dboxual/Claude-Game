@@ -14,6 +14,7 @@ void ContentRegistry::registerBuiltins() {
         w.damage = 10.0f;
         w.range = 1.6f;
         w.cooldownSeconds = 0.4f;
+        w.weight = 0.6f; // snappy but weak
         weapons_.push_back(w);
     }
     {
@@ -24,6 +25,7 @@ void ContentRegistry::registerBuiltins() {
         w.damage = 35.0f;
         w.range = 1.9f;
         w.cooldownSeconds = 0.5f;
+        w.weight = 0.75f;
         weapons_.push_back(w);
     }
     {
@@ -43,7 +45,8 @@ void ContentRegistry::registerBuiltins() {
         w.kind = WeaponKind::Melee;
         w.damage = 45.0f;
         w.range = 2.4f;          // longest melee reach...
-        w.cooldownSeconds = 0.7f; // ...paid for with the slowest swing
+        w.cooldownSeconds = 0.7f; // ...paid for with the heaviest swing
+        w.weight = 1.0f;
         weapons_.push_back(w);
     }
 
@@ -132,6 +135,48 @@ void ContentRegistry::registerBuiltins() {
             {{0.0f, 0.42f, 0.0f}, {0.14f, 0.60f, 0.14f}, {0.45f, 0.40f, 0.30f}}, // post
             {{0.0f, 1.05f, 0.0f}, {0.52f, 0.66f, 0.30f}, {0.82f, 0.72f, 0.45f}}, // torso
             {{0.0f, 1.55f, 0.0f}, {0.28f, 0.30f, 0.26f}, {0.88f, 0.80f, 0.58f}}, // head
+        };
+        defs_.push_back(d);
+    }
+    {
+        // Duelist bot: the melee sparring partner. Same silhouette family as
+        // the training dummy but armored colors so the two read differently.
+        // Its slow telegraphed attacks/guard live in client code for now
+        // (no full AI); the combat exchange itself is shared/melee.
+        EntityDef d;
+        d.id = "duel_bot";
+        d.displayName = "Duelist Bot";
+        d.category = ContentCategory::Bot;
+        d.size = {0.70f, 1.90f, 0.70f};
+        d.color = {0.45f, 0.48f, 0.56f};
+        d.solid = true;
+        d.maxHealth = 150.0f;
+        d.respawnSeconds = 6.0f;
+        d.visual = {
+            {{0.0f, 0.06f, 0.0f}, {0.66f, 0.12f, 0.66f}, {0.30f, 0.30f, 0.34f}},  // base
+            {{0.0f, 0.45f, 0.0f}, {0.16f, 0.66f, 0.16f}, {0.36f, 0.38f, 0.44f}},  // legs post
+            {{0.0f, 1.10f, 0.0f}, {0.54f, 0.64f, 0.32f}, {0.45f, 0.48f, 0.56f}},  // cuirass
+            {{0.0f, 1.47f, 0.0f}, {0.62f, 0.10f, 0.36f}, {0.36f, 0.38f, 0.44f}},  // shoulders
+            {{0.0f, 1.66f, 0.0f}, {0.28f, 0.28f, 0.26f}, {0.62f, 0.64f, 0.70f}},  // helm
+        };
+        defs_.push_back(d);
+    }
+    {
+        // Round shield pickup: equipping it makes blocks cheaper but slows
+        // you while raised, and kicks can smash it open. Gear, not a weapon:
+        // it rides along with whatever melee weapon is held.
+        EntityDef d;
+        d.id = "shield";
+        d.displayName = "Shield";
+        d.category = ContentCategory::Pickup;
+        d.size = {0.55f, 0.35f, 0.55f};
+        d.color = {0.46f, 0.30f, 0.16f};
+        d.gear = true;
+        d.respawnSeconds = 10.0f;
+        d.visual = {
+            {{0.0f, 0.10f, 0.0f}, {0.50f, 0.06f, 0.50f}, {0.46f, 0.30f, 0.16f}},   // face
+            {{0.0f, 0.135f, 0.0f}, {0.16f, 0.055f, 0.16f}, {0.62f, 0.64f, 0.70f}}, // boss
+            {{0.0f, 0.08f, 0.0f}, {0.55f, 0.025f, 0.55f}, {0.30f, 0.32f, 0.36f}},  // rim
         };
         defs_.push_back(d);
     }

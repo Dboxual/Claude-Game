@@ -22,6 +22,7 @@ add_library(tac_shared STATIC
     src/shared/config.cpp
     src/shared/content.cpp
     src/shared/content_loader.cpp
+    src/shared/melee.cpp
     src/shared/player.cpp
     src/shared/world.cpp
     src/shared/world_save.cpp
@@ -74,6 +75,9 @@ target_link_libraries(tacmove_server PRIVATE tac_shared)
 foreach(target tac_shared tac_client_game tac_client_renderer tac_client_platform_sdl tacmove tacmove_server)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
+        # Portable C stdio (sscanf in the config parsers) is fine; the
+        # Microsoft-only _s variants are not a portability win here.
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra)
     endif()

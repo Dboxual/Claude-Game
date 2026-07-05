@@ -33,6 +33,7 @@ bool parseWeaponDef(const std::string& text, WeaponDef& out) {
     w.damage = cfg.get("damage", w.damage);
     w.range = cfg.get("range", w.range);
     w.cooldownSeconds = cfg.get("cooldown", w.cooldownSeconds);
+    w.weight = cfg.get("weight", w.weight);
     out = w;
     return true;
 }
@@ -57,6 +58,7 @@ bool parseEntityDef(const std::string& text, EntityDef& out) {
     d.solid = getBool(cfg, "solid", d.solid);
     d.spawnable = getBool(cfg, "spawnable", d.spawnable);
     d.carryable = getBool(cfg, "carryable", d.carryable);
+    d.gear = getBool(cfg, "gear", d.gear);
     d.weaponId = cfg.getString("weapon", "");
     d.maxHealth = cfg.get("max_health", d.maxHealth);
     d.respawnSeconds = cfg.get("respawn_seconds", d.respawnSeconds);

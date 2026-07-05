@@ -13,14 +13,23 @@ struct InputState {
     bool crouchHeld = false;
     bool walkHeld = false;
 
+    // Held state (combat).
+    bool attackHeld = false; // left mouse held (charges a heavy attack)
+    bool blockHeld = false;  // right mouse held (guard up / parry timing)
+
     // Edge-triggered: true only on the pump where the press happened.
     bool jumpPressed = false;
     bool escapePressed = false;
     bool reloadConfigPressed = false;
     bool toggleHudPressed = false;
-    bool spawnMenuPressed = false; // Q toggles the dev spawn menu in-game
+    bool spawnMenuPressed = false; // B toggles the dev spawn menu in-game
     bool interactPressed = false;  // E: pick up / use what the player looks at
     bool attackPressed = false;    // left mouse edge (gameplay attack)
+    bool kickPressed = false;      // F: kick (opens raised guards)
+    bool throwPressed = false;     // Q: throw the held melee weapon
+    bool feintPressed = false;     // R or middle mouse: cancel the windup
+    bool altAttackPressed = false; // Left Alt or mouse side button: alternate slash
+    int wheelDelta = 0;            // scroll steps this pump: >0 up (overhead), <0 down (stab)
     int slotPressed = 0;           // 1..9 when a weapon-slot key was pressed, else 0
     bool mouseClicked = false;
     bool enterPressed = false;

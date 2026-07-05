@@ -33,6 +33,10 @@ Rules of the format:
   world save file.
 - `carryable = 1` marks light props the player can E-carry; heavy or static
   objects leave it 0. This is deliberately a boolean, not a weight system.
+- `gear = 1` marks equipment pickups (the shield): E equips them instead of
+  granting a weapon or starting a carry.
+- Weapon defs can set `weight` (fists 0.6 … sword 1.0): it scales melee
+  windup/recovery times and stamina costs in `src/shared/melee.cpp`.
 
 Still hard-coded in C++ (documented seams, not accidents):
 

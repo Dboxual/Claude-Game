@@ -336,6 +336,18 @@ void GLRenderer::drawBoxes(const RenderFrame& frame) {
         glUniform1i(locChecker_, box.checkerTop ? 1 : 0);
         glDrawArrays(GL_TRIANGLES, 0, 36);
     }
+
+    // World-space oriented boxes (bot weapon telegraphs, thrown weapons,
+    // sparks) share the pass: same view/proj, full model matrices.
+    glUniform1i(locChecker_, 0);
+    for (const ViewmodelBoxDraw& box : frame.orientedBoxes) {
+        glm::mat3 normalMat = glm::inverseTranspose(glm::mat3(box.transform));
+        glUniformMatrix4fv(locModel_, 1, GL_FALSE, glm::value_ptr(box.transform));
+        glUniformMatrix3fv(locNormalMat_, 1, GL_FALSE, glm::value_ptr(normalMat));
+        glUniform3f(locColor_, box.color.r, box.color.g, box.color.b);
+        glUniform1f(locEmissive_, box.emissive);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+    }
     glBindVertexArray(0);
 }
 

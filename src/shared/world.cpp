@@ -44,6 +44,7 @@ void World::addEntity(const EntityDef& def, const glm::vec3& pos, float respawnO
     e.color = def.color;
     e.solid = def.solid;
     e.carryable = def.carryable;
+    e.gear = def.gear;
     e.weaponId = def.weaponId;
     e.maxHealth = def.maxHealth;
     e.respawnSeconds = respawnOverride >= 0.0f ? respawnOverride : def.respawnSeconds;
@@ -97,7 +98,7 @@ World::EntityHit World::raycastEntities(const glm::vec3& origin, const glm::vec3
         const WorldEntity& e = entities_[i];
         if (!e.active || e.carried) continue;
         if (mask == RayMask::Interactables) {
-            if (e.weaponId.empty() && !e.carryable) continue;
+            if (e.weaponId.empty() && !e.carryable && !e.gear) continue;
         } else { // AttackTargets: bullets pass through non-solid pickups
             if (!e.solid && e.maxHealth <= 0.0f) continue;
         }

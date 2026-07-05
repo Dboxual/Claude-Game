@@ -212,6 +212,117 @@ std::vector<float> uiClick() {
     return buf;
 }
 
+// Weapon block: a dull metallic knock - a mid sine thunk under a short
+// band of noise. Solid, but clearly not the bright parry reward.
+std::vector<float> block() {
+    auto buf = makeBuffer(0.16f);
+    Rng rng; OnePole lp;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float knock = std::sin(2 * 3.14159265f * 310.0f * t) * envExp(t, 0.045f);
+        float clank = lp.step(rng.next(), 1400.0f) * envExp(t, 0.02f) * 0.8f;
+        buf[i] = std::tanh((knock + clank) * 1.4f);
+    }
+    finalize(buf, 0.62f);
+    return buf;
+}
+
+// Parry: the reward sound - two detuned high partials ringing like struck
+// steel over an instant crack.
+std::vector<float> parry() {
+    auto buf = makeBuffer(0.34f);
+    Rng rng;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float ringA = std::sin(2 * 3.14159265f * 2350.0f * t) * envExp(t, 0.085f);
+        float ringB = std::sin(2 * 3.14159265f * 3140.0f * t) * envExp(t, 0.055f) * 0.7f;
+        float crack = rng.next() * envExp(t, 0.006f) * 0.9f;
+        buf[i] = ringA + ringB + crack;
+    }
+    finalize(buf, 0.60f);
+    return buf;
+}
+
+// Shield block: deep and woody - a low thump with a soft mid knock, no ring.
+std::vector<float> shieldBlock() {
+    auto buf = makeBuffer(0.20f);
+    Rng rng; OnePole lp;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float thump = std::sin(2 * 3.14159265f * 140.0f * t) * envExp(t, 0.06f);
+        float wood = lp.step(rng.next(), 420.0f) * envExp(t, 0.03f) * 0.8f;
+        buf[i] = std::tanh((thump + wood) * 1.5f);
+    }
+    finalize(buf, 0.68f);
+    return buf;
+}
+
+// Kick hit: a blunt body thump - fast pitch-dropping low sine plus a short
+// midrange slap.
+std::vector<float> kickHit() {
+    auto buf = makeBuffer(0.16f);
+    Rng rng; OnePole lp;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float f = 95.0f - 35.0f * std::min(t / 0.1f, 1.0f);
+        float thump = std::sin(2 * 3.14159265f * f * t) * envExp(t, 0.05f);
+        float slap = lp.step(rng.next(), 900.0f) * envExp(t, 0.014f) * 0.9f;
+        buf[i] = std::tanh((thump + slap) * 1.6f);
+    }
+    finalize(buf, 0.72f);
+    return buf;
+}
+
+// Guard break: a falling two-tone groan with a rattle - unmistakably "your
+// defense just collapsed".
+std::vector<float> guardBreak() {
+    auto buf = makeBuffer(0.42f);
+    Rng rng; OnePole lp;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float f = 480.0f - 260.0f * std::min(t / 0.3f, 1.0f);
+        float toneA = std::sin(2 * 3.14159265f * f * t) * envExp(t, 0.13f);
+        float toneB = std::sin(2 * 3.14159265f * f * 0.5f * t) * envExp(t, 0.16f) * 0.7f;
+        float rattle = lp.step(rng.next(), 1100.0f) *
+                       (0.5f + 0.5f * std::sin(2 * 3.14159265f * 31.0f * t)) *
+                       envExp(t, 0.10f) * 0.55f;
+        buf[i] = std::tanh((toneA + toneB + rattle) * 1.3f);
+    }
+    finalize(buf, 0.72f);
+    return buf;
+}
+
+// Throw: a short bright whoosh - the swing's band sweep, faster and higher.
+std::vector<float> throwWoosh() {
+    auto buf = makeBuffer(0.20f);
+    Rng rng; OnePole lpHi, lpLo;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float sweep = t / 0.20f;
+        float hi = 900.0f + 2400.0f * sweep;
+        float lo = 400.0f + 1000.0f * sweep;
+        float n = rng.next();
+        float band = lpHi.step(n, hi) - lpLo.step(n, lo);
+        buf[i] = band * envBell(t, 0.18f);
+    }
+    finalize(buf, 0.48f);
+    return buf;
+}
+
+// Windup cue: the duelist bot's audible telegraph - a quiet rising two-note
+// "breath in" that starts exactly when its windup starts. Parry timer.
+std::vector<float> windupCue() {
+    auto buf = makeBuffer(0.18f);
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float f = 620.0f + 300.0f * (t / 0.18f);
+        float v = std::sin(2 * 3.14159265f * f * t);
+        buf[i] = v * envBell(t, 0.17f);
+    }
+    finalize(buf, 0.30f);
+    return buf;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -223,9 +334,12 @@ int main(int argc, char** argv) {
         std::vector<float> (*make)();
     };
     const Entry entries[] = {
-        {"footstep", footstep}, {"pickup", pickup},      {"swing", swing},
-        {"gunshot", gunshot},   {"dummy_hit", dummyHit}, {"melee_hit", meleeHit},
-        {"ui_click", uiClick},
+        {"footstep", footstep},   {"pickup", pickup},        {"swing", swing},
+        {"gunshot", gunshot},     {"dummy_hit", dummyHit},   {"melee_hit", meleeHit},
+        {"ui_click", uiClick},    {"block", block},          {"parry", parry},
+        {"shield_block", shieldBlock}, {"kick_hit", kickHit},
+        {"guard_break", guardBreak},   {"throw", throwWoosh},
+        {"windup_cue", windupCue},
     };
 
     bool ok = true;

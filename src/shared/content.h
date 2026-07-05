@@ -30,7 +30,8 @@ struct WeaponDef {
     WeaponKind kind = WeaponKind::Melee;
     float damage = 0.0f;
     float range = 1.5f;          // melee reach / max hitscan distance, meters
-    float cooldownSeconds = 0.5f;
+    float cooldownSeconds = 0.5f; // hitscan fire interval (melee timing lives in shared/melee)
+    float weight = 1.0f;          // melee heft: scales windup/recovery/stamina (1 = sword)
 };
 
 // --- world entities (things placed in a world) ---------------------------
@@ -56,6 +57,7 @@ struct EntityDef {
     std::string weaponId;   // non-empty = pickup granting this weapon
     float maxHealth = 0.0f; // >0 = damageable (training dummy)
     bool carryable = false; // light props can be E-carried; heavy/static cannot
+    bool gear = false;      // non-weapon equipment pickup (shield): E equips it
 
     // Respawn rule, stated once here and honored everywhere: after this many
     // seconds a taken pickup / destroyed bot comes back at its spawn point.

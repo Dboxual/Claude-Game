@@ -101,9 +101,15 @@ see [PORTING.md](PORTING.md)).
 | Space | Jump (buffered — a slightly early press still counts) |
 | Left Ctrl or C | Crouch (hold) |
 | Left Shift | Walk (hold) |
-| Q | Toggle the dev spawn menu (in game) |
+| Left mouse | Slash (sides alternate); **keep holding through the windup to commit a heavy** |
+| Right mouse (hold) | Block — raising it just before impact is a **parry** |
+| Mouse wheel up / down | Overhead cut / stab |
+| Left Alt or mouse side button | Alternate-side slash |
+| R or middle mouse | Feint: cancel your windup (costs stamina) |
+| F | Kick — smashes raised guards open (short range, cooldown) |
+| Q | Throw the held melee weapon (arcs, lands as a pickup) |
 | E | Pick up the item you are looking at; carry/drop light props |
-| Left mouse | Attack with the equipped weapon |
+| B | Toggle the dev spawn menu (in game) |
 | 1 2 3 4 | Switch weapon slot |
 | Esc | In game: pause/resume. In menus: go back a screen |
 | F5 | Hot-reload `config/movement.cfg` |
@@ -155,8 +161,8 @@ field still load). **Load World** lists every world under `worlds/` and
 reopens it with all placed objects. The classic **test arena** is still
 there via Start Test World — it is a fixed training map and is never saved.
 
-In game, **Q** opens the dev/admin spawn menu (GMod-style category tabs:
-**Weapons / Bots / Props / Pickups**). Objects spawn a couple of meters in
+In game, **B** opens the dev/admin spawn menu (GMod-style category tabs:
+**Weapons / Bots / Props / Pickups** — Q now throws your weapon). Objects spawn a couple of meters in
 front of you; crates and dummies are solid and block movement, weapon
 pickups hover, bob, and are non-solid. Persistent worlds save automatically
 on every spawn and on Quit to Menu.
@@ -164,12 +170,66 @@ on every spawn and on Quit to Menu.
 **Weapons.** You start with fists. Look at a karambit, Glock, or sword
 pickup and press **E** — it is added to your inventory (bar at the bottom
 of the screen), auto-equipped, and vanishes from the world until it
-respawns. Switch with **1/2/3/4**, attack with **left mouse**. Fists,
-karambit, and the fantasy sword are melee (the sword trades the slowest
-swing for the longest reach); the Glock is a semi-auto hitscan pistol
-(unlimited ammo for now). The **training dummy** has 100 HP, flashes red on
-hits, shows its health when you aim at it, and respawns 5 seconds after
-being destroyed.
+respawns. Switch with **1/2/3/4**. Fists, karambit, and the fantasy sword
+are melee and run through the duel system below (heavier weapons wind up
+and recover slower — `weight` in the weapon def); the Glock is a semi-auto
+hitscan pistol (unlimited ammo for now). The **training dummy** has 100 HP,
+flashes red on hits, shows its health when you aim at it, and respawns 5
+seconds after being destroyed.
+
+## Melee combat (duel prototype)
+
+Melee is timing-based, not click-spam — an original system in the spirit of
+heavy medieval duel games. The core lives in `src/shared/melee.{h,cpp}` as
+pure state + functions (no IO, no rendering), so a future authoritative
+server can run the exact same exchange per player; the client feeds it
+inputs and turns outcomes into sound, sparks, and screen shake.
+
+- **Stamina** (bar above the weapon bar): every swing, feint, kick, throw,
+  and *blocked hit taken* spends it; it regenerates after a short delay,
+  but not while your guard is up. Below 30 your defense weakens (blocks
+  cost 1.5x). If a block drains you to zero your **guard breaks**: a long
+  stagger, a distinctive sound, and you are wide open.
+- **Attack phases**: windup → active hit window → recovery. Attacking
+  during the tail of recovery chains a **combo** (faster windup, rising
+  stamina cost, max 3 deep). Every attack sweeps until it connects once.
+- **Attacks**: left/right slashes (LMB, sides alternate; Alt forces the
+  other side), overhead (wheel up), stab (wheel down). Holding LMB through
+  the windup commits a **heavy**: longer windup, 1.6x damage, much more
+  expensive — and brutal against blocks.
+- **Block & parry** (RMB): holding block eats hits for stamina. Raising the
+  guard *just before* impact (150 ms window) is a **parry**: sparks, ring,
+  the attacker staggers, and your next attack within 0.8 s is a **riposte**
+  (fast windup, +25% damage).
+- **Perfect counter**: if you answer an incoming attack by winding up the
+  *same* attack type as the strike lands, the blades meet — the attacker is
+  thrown off hard and your own strike accelerates into a riposte. Read the
+  bot's blade position (and the windup cue sound) to match it.
+- **Feint** (R or middle mouse): cancels your windup for stamina, flowing
+  into a different attack. Stamina is the anti-spam: there are no free
+  cancels.
+- **Kick** (F): short range, cooldown, won't clash with blades — it exists
+  to smash raised guards open (stagger + stamina drain). The answer to a
+  turtling shield.
+- **Shield** (pickup, spawn menu → Pickups): rides along with any melee
+  weapon. Blocks cost 40% less, but you walk slower while it is raised,
+  raising it pauses stamina regen, and a kick opens it like any guard.
+- **Throw** (Q): hurls the held melee weapon in an arc — it tumbles, deals
+  damage on a body hit (a raised guard swats it away), and lands as a
+  pickup you can grab back with E. Fists stay home.
+
+**Sparring partner:** spawn the **Duelist Bot** (spawn menu → Bots). It
+performs slow, telegraphed basic attacks — the blade visibly winds to the
+side the cut comes from and a cue sound marks the windup start — and
+sometimes holds its guard up after attacking. It has health and stamina of
+its own: parry it, riposte it, perfect-counter it, kick its guard open, or
+grind its stamina down until its guard breaks. It never parries and never
+counters (it is a training partner, not an AI milestone).
+
+Feedback: sparks on every clash, hit-stop on clean hits, screen shake on
+heavy impacts, a red flash when you get hit, and distinct original sounds
+for swing / body hit / block / parry / shield block / kick / guard break /
+throw (see `server/content/sounds/CREDITS.md`).
 
 **First-person viewmodels.** The held weapon is drawn as a real 3D model in
 the player's hands — lit, oriented geometry in camera space with its own

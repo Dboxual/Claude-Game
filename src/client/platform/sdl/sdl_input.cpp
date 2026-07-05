@@ -9,6 +9,11 @@ const InputState& SdlInput::pump() {
     state_.spawnMenuPressed = false;
     state_.interactPressed = false;
     state_.attackPressed = false;
+    state_.kickPressed = false;
+    state_.throwPressed = false;
+    state_.feintPressed = false;
+    state_.altAttackPressed = false;
+    state_.wheelDelta = 0;
     state_.slotPressed = 0;
     state_.mouseClicked = false;
     state_.enterPressed = false;
@@ -34,6 +39,12 @@ const InputState& SdlInput::pump() {
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             state_.mouseClicked = true;
             if (e.button.button == SDL_BUTTON_LEFT) state_.attackPressed = true;
+            else if (e.button.button == SDL_BUTTON_MIDDLE) state_.feintPressed = true;
+            else if (e.button.button == SDL_BUTTON_X1) state_.altAttackPressed = true;
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            if (e.wheel.y > 0.0f) state_.wheelDelta += 1;
+            else if (e.wheel.y < 0.0f) state_.wheelDelta -= 1;
             break;
         case SDL_EVENT_TEXT_INPUT:
             state_.typedText += e.text.text;
@@ -44,7 +55,11 @@ const InputState& SdlInput::pump() {
             if (e.key.key == SDLK_ESCAPE) state_.escapePressed = true;
             else if (e.key.key == SDLK_F5) state_.reloadConfigPressed = true;
             else if (e.key.key == SDLK_F1) state_.toggleHudPressed = true;
-            else if (e.key.key == SDLK_Q) state_.spawnMenuPressed = true;
+            else if (e.key.key == SDLK_B) state_.spawnMenuPressed = true;
+            else if (e.key.key == SDLK_Q) state_.throwPressed = true;
+            else if (e.key.key == SDLK_F) state_.kickPressed = true;
+            else if (e.key.key == SDLK_R) state_.feintPressed = true;
+            else if (e.key.key == SDLK_LALT) state_.altAttackPressed = true;
             else if (e.key.key == SDLK_E) state_.interactPressed = true;
             else if (e.key.key >= SDLK_1 && e.key.key <= SDLK_9) {
                 state_.slotPressed = int(e.key.key - SDLK_1) + 1;
@@ -58,9 +73,11 @@ const InputState& SdlInput::pump() {
     }
 
     // Cursor position in render pixels (window coords scaled by the HiDPI
-    // pixel ratio) for UI hit-testing.
+    // pixel ratio) for UI hit-testing; button masks feed held combat state.
     float mx = 0.0f, my = 0.0f;
-    SDL_GetMouseState(&mx, &my);
+    SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mx, &my);
+    state_.attackHeld = (buttons & SDL_BUTTON_LMASK) != 0;
+    state_.blockHeld = (buttons & SDL_BUTTON_RMASK) != 0;
     int winW = 0, winH = 0, pxW = 0, pxH = 0;
     window_->windowSize(winW, winH);
     window_->pixelSize(pxW, pxH);

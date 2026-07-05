@@ -8,12 +8,14 @@
 #include "shared/config.h"
 #include "shared/content.h"
 #include "shared/inventory.h"
+#include "shared/melee.h"
 #include "shared/player.h"
 #include "shared/world.h"
 
 #include <glm/glm.hpp>
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // The whole client behind the platform seams: main menu shell, pause menu,
@@ -114,11 +116,23 @@ private:
     glm::vec3 lookDirection() const;
     void updateAimTarget();
     void tryInteract();
-    void tryAttack();
+    void tryAttack(); // hitscan weapons only; melee runs through updateMelee
     void updateCarriedProp();
     void dropCarriedProp();
     void showToast(std::string text);
     void sfx(const char* soundName) const; // no-op without an audio backend
+
+    // Melee combat (client side of shared/melee: inputs, targeting, feedback).
+    void updateMelee(const InputState& in, float dt);
+    void performMeleeStrike(const WeaponDef& weapon);
+    void updateBots(float dt);
+    void updateThrownWeapons(float dt);
+    void tryThrowWeapon();
+    void spawnDroppedWeapon(const std::string& weaponId, glm::vec3 nearPos);
+    void addSparks(const glm::vec3& pos, int count, const glm::vec3& color);
+    void updateSparks(float dt);
+    void triggerShake(float amplitude, float seconds);
+    void applyBotStrikeOnPlayer(melee::Actor& bot);
 
     void loadContentFiles(); // server/content/ defs replace matching builtins
 
@@ -152,9 +166,7 @@ private:
 
     // Combat / interaction state (reset by beginSession).
     Inventory inventory_;
-    float attackCooldown_ = 0.0f;   // seconds until the equipped weapon can fire
-    float swingTimer_ = 0.0f;       // melee-swing viewmodel animation
-    float swingDuration_ = 0.18f;   // length of the current swing (per weapon)
+    float attackCooldown_ = 0.0f;   // hitscan fire interval (melee paces itself)
     float muzzleFlashTimer_ = 0.0f; // pistol-fire viewmodel flash/recoil
     float hitMarkerTimer_ = 0.0f;   // crosshair hit confirmation
     float footstepDistance_ = 0.0f; // meters walked since the last step sound
@@ -162,6 +174,50 @@ private:
     float bobIntensity_ = 0.0f;     // 0..~1, eased so stopping settles the hands
     float equipTimer_ = 0.0f;       // weapon-raise animation after switching
     std::string lastEquippedId_;    // change detection for the equip animation
+
+    // Melee combat state. playerMelee_ is the shared-module actor the future
+    // server would own; everything below it is client presentation.
+    melee::Actor playerMelee_;
+    melee::Phase prevMeleePhase_ = melee::Phase::Idle; // sound/anim edge detection
+    bool hasShield_ = false;
+    bool nextSlashLeft_ = false;    // left click alternates slash sides
+    bool heavyEligible_ = false;    // current windup was started by LMB (hold = heavy)
+
+    struct ThrownWeapon {
+        std::string weaponId;
+        glm::vec3 pos{0.0f};
+        glm::vec3 vel{0.0f};
+        float spin = 0.0f; // end-over-end rotation, radians
+        float life = 0.0f;
+    };
+    std::vector<ThrownWeapon> thrown_;
+
+    struct Spark {
+        glm::vec3 pos{0.0f};
+        glm::vec3 vel{0.0f};
+        glm::vec3 color{1.0f};
+        float life = 0.0f; // counts down to 0
+        float total = 0.3f;
+    };
+    std::vector<Spark> sparks_;
+
+    // A duelist bot's combat brain, keyed by stable entity id. The actor is
+    // the same shared struct the player uses; the few timers around it are
+    // the "no full AI yet" decision loop.
+    struct BotBrain {
+        melee::Actor actor;
+        float decideIn = 1.5f;  // seconds until it may start the next attack
+        float guardLeft = 0.0f; // >0 = holding its guard up
+        unsigned rng = 0x9E3779B9u;
+    };
+    std::unordered_map<unsigned, BotBrain> bots_;
+
+    // Combat feedback (presentation only).
+    float hitStop_ = 0.0f;      // impact pause: sim time crawls while > 0
+    float shakeTime_ = 0.0f;    // screen shake remaining / total / strength
+    float shakeTotal_ = 1.0f;
+    float shakeAmp_ = 0.0f;
+    float damageFlash_ = 0.0f;  // red vignette after the player is struck
     unsigned carriedEntityId_ = 0;  // world id of the carried prop; 0 = none
     std::string hudToast_;          // transient gameplay message
     double hudToastTimer_ = 0.0;

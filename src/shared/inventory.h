@@ -43,6 +43,17 @@ struct Inventory {
         return true;
     }
 
+    // Removes the equipped weapon (for throwing) and re-equips the base
+    // slot 0 weapon. Returns the removed id, or "" if the base weapon is
+    // equipped (bare hands cannot be thrown away).
+    std::string removeEquipped() {
+        if (equipped <= 0 || equipped >= int(weapons.size())) return {};
+        std::string id = weapons[size_t(equipped)];
+        weapons.erase(weapons.begin() + equipped);
+        equipped = 0;
+        return id;
+    }
+
     const std::string& equippedId() const {
         static const std::string none;
         if (weapons.empty()) return none;

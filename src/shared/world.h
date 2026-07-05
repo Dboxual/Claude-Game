@@ -39,6 +39,7 @@ struct WorldEntity {
     glm::vec3 color{1.0f};
     bool solid = false;
     bool carryable = false;      // light prop the player may E-carry
+    bool gear = false;           // equipment pickup (shield): E equips it
     std::string weaponId;        // non-empty = pickup granting this weapon
     float maxHealth = 0.0f;      // >0 = damageable
     float respawnSeconds = 0.0f; // 0 = never respawns (consumed/destroyed for good)
