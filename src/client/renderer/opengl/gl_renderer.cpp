@@ -272,12 +272,38 @@ void GLRenderer::render(const RenderFrame& frame) {
     glClearColor(0.55f, 0.65f, 0.75f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    drawSky(frame);
     drawBoxes(frame);
     drawViewmodel(frame);
     drawRects(frame);
     drawTexts(frame);
 
     window_->present();
+}
+
+// Vertical gradient behind the world: deeper blue overhead easing into the
+// fog color near the bottom, so the emptiness above the arena reads as sky
+// instead of a flat clear color. Reuses the UI rect pipeline.
+void GLRenderer::drawSky(const RenderFrame& frame) {
+    const float w = float(frame.viewportW);
+    const float h = float(frame.viewportH);
+    const float t[4] = {0.33f, 0.47f, 0.68f, 1.0f}; // zenith
+    const float b[4] = {0.58f, 0.68f, 0.77f, 1.0f}; // horizon, matches the fog
+    const float verts[6][6] = {
+        {0, 0, t[0], t[1], t[2], t[3]}, {w, 0, t[0], t[1], t[2], t[3]},
+        {w, h, b[0], b[1], b[2], b[3]}, {0, 0, t[0], t[1], t[2], t[3]},
+        {w, h, b[0], b[1], b[2], b[3]}, {0, h, b[0], b[1], b[2], b[3]},
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glUseProgram(rectProg_);
+    glUniform2f(locRectScreen_, w, h);
+    glBindVertexArray(rectVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, rectVbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
 }
 
 void GLRenderer::drawRects(const RenderFrame& frame) {

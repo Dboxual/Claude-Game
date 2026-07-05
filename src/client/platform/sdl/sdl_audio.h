@@ -15,7 +15,7 @@ public:
     bool init() override;
     void shutdown() override;
     bool loadSound(const std::string& name, const std::string& path) override;
-    void playSound(const std::string& name) override;
+    void playSound(const std::string& name, float pitch) override;
     void setVolumes(float master, float music, float sfx) override;
     const char* name() const override { return "SDL3 audio"; }
 

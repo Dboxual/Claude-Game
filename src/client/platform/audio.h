@@ -17,9 +17,11 @@ public:
     virtual bool loadSound(const std::string& name, const std::string& path) = 0;
 
     // Fire-and-forget one-shot playback at the current master*sfx volume.
-    // Unknown names are silently ignored so gameplay never has to care
-    // whether audio is available.
-    virtual void playSound(const std::string& name) = 0;
+    // pitch scales playback speed (1 = as recorded); small variations keep
+    // repeated sounds (footsteps) from feeling machine-gunned. Unknown
+    // names are silently ignored so gameplay never has to care whether
+    // audio is available.
+    virtual void playSound(const std::string& name, float pitch = 1.0f) = 0;
 
     // Volumes are 0..1. Applied to every subsequent playSound.
     virtual void setVolumes(float master, float music, float sfx) = 0;

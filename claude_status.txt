@@ -1,122 +1,102 @@
-TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 5)
+TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 6)
 ============================================================================
 
-Fifth drop on this branch: the melee rework. Update 4 built the skeleton
-(stamina/phases/parry); this drop makes it FEEL like a duel, following the
-Chivalry 2 mechanic STRUCTURE (read -> react -> punish -> stamina pressure
--> finish) with entirely original values, names, code, sounds and visuals.
-Written by Claude on Windows 11 (MSVC, RTX 4060 Ti).
+Sixth drop: the POLISH pass. Direction changed - no more platform/PvP
+feature chasing; make what exists feel like a real playable game. This
+drop touches presentation, feel, and first-run experience only; no new
+systems, one system deliberately simplified.
 
 DONE THIS DROP (built on Windows x64, client + server, /W4 zero warnings)
 --------------------------------------------------------------------------
-- THE BLADE TRAVELS THROUGH SPACE (the big feel fix): during the release,
-  the strike ray is no longer the crosshair - it SWEEPS. Slashes arc +/-32
-  degrees across the view (left slash crosses left->right, right slash the
-  mirror), overheads sweep +28 -> -22 degrees top to bottom, stabs/jabs
-  thrust straight. Contact lands where the blade actually is, sparks and
-  all. Because the sweep is camera-relative this IS drag/accel: turning
-  into your swing connects earlier, dragging away delays it. ~20 lines in
-  performMeleeStrike (game.cpp), zero new systems.
-- Commitment / no free spam: whiffed swings recover x1.2 (kicks x1.5,
-  melee.cpp tick); swinging into walls, crates or barrels now CLANGS -
-  sound, sparks, bounce recovery (melee::bounceOff) instead of a silent
-  no-op. Combo chains still cost escalating stamina.
-- JAB (V key, new Attack::Jab): 0.13 s windup pommel bash, 3 damage,
-  7 stamina, 0.9 s cooldown, 1.5 m. Interrupts windups (new outcome
-  Outcome::Interrupted, 0.55 s flinch) to stop pressure and reset tempo;
-  just thuds into guards (cheap 4-stamina block for the defender). Any
-  clean hit on a winding-up defender now reports Interrupted, so normal
-  swings also read as "you got interrupted" both ways.
-- RIPOSTE is now visibly a reward: a big gold "RIPOSTE!" prompt sits above
-  the crosshair for the whole 0.9 s window, and ripostes are PROTECTED -
-  strikes into a riposte windup get deflected (new Outcome::Deflected:
-  attacker bounces + pays, defender loses nothing, toast explains it).
-  Kicks/jabs cannot interrupt a riposte either (they fall through).
-- Counter language is taught, not guessed: aiming at the bot during its
-  windup names the attack ("WINDING UP STAB" in the readout). Answer with
-  the same attack type -> PERFECT COUNTER (unchanged rules from update 4:
-  attacker staggered 1.3 s, your windup accelerates into a riposte).
-- Stamina pressure: holding the guard up now drains 2/s (3/s with shield)
-  on top of pausing regen - turtling loses the stamina war. Per-attack
-  block costs moved into the spec table (slash 12 / overhead 16 / stab 10 /
-  jab 4, heavies x1.6, shield x0.6, low-stamina x1.5). Timings slowed to
-  duel weight: sword slash 0.35 windup / 0.18 release / 0.42 recover,
-  overhead 0.42/0.16/0.48, stab 0.30/0.12/0.38 (x weapon weight).
-- Impact reactions: damageable entities FLINCH - the visual-part stack
-  leans away from the player on a hit (taller parts lean further, so the
-  whole thing tips) and a staggered duelist reels back for the entire
-  stagger. Combined with hit-stop + the new deeper melee_hit (150->85 Hz
-  pitch-dropping thump regenerated in tools/generate_sounds.cpp), clean
-  hits finally land ON something.
-- Bot timing polish: its strike now lands 35% into the hit window (the
-  blade has visibly turned red by then), giving honest parry timing.
-  Recolored bronze (builtin + duel_bot.cfg) because the old slate armor
-  camouflaged against the arena walls - reading the bot IS the gameplay.
-- RESPAWN DEFAULTS FIXED (the second half of the task): respawn_seconds
-  is now 0 for EVERYTHING - weapon pickups, shield, training dummy, duel
-  bot (builtins + all cfg files). Taken/destroyed means gone unless a def
-  or a per-entity world-save line opts in. Thrown/dropped weapons already
-  spawned with respawn 0 and stay in the world until re-taken. Docs
-  updated (content.h comment, server/README.md, README.md).
+POLISHED:
+- The test arena is furnished (Game::startTestWorld): a weapon rack on the
+  crate row (sword/glock/karambit, one per step height), a shield nearby,
+  a training corner by the strafe pillars (training dummy + duelist bot),
+  a crate stack and barrels near spawn to carry around. Arena-only respawn
+  overrides (pickups 15 s, bots 10 s) keep the playground stocked; created
+  worlds keep the nothing-respawns default. Opening the game now demos
+  every system with zero spawn-menu knowledge.
+- Sky: vertical gradient (deep blue zenith -> fog-colored horizon) drawn
+  behind the world via the rect pipeline (GLRenderer::drawSky). The void
+  above the arena walls finally reads as sky, and the fog line blends
+  into it instead of hitting a flat clear color.
+- Glock feel: bullet tracers (bright thinning line from muzzle to impact,
+  60 ms, world-space oriented boxes) + impact puff sparks wherever the
+  shot lands + slight per-shot pitch variation. Shots visibly travel and
+  hit something now.
+- Viewmodel feel: look sway (hands lag a beat behind the camera and
+  settle), landing dip scaled by fall speed, both on the shared root so
+  every weapon gets them. Footsteps got pitch variation (0.92-1.08) and
+  landing plays a low thud - IAudio::playSound grew an optional pitch
+  parameter (SDL_SetAudioStreamFrequencyRatio under the hood).
+- Prop carrying: the carried prop now pulls in toward you when a wall is
+  closer than the hold distance (raycast clamp) - it can no longer stick
+  through geometry while carried. Dropping tries several spots from the
+  hold point inward, settles each candidate onto the floor/stack below,
+  and only places where nothing overlaps (walls, props, or the player);
+  if nowhere fits you keep carrying and get told "NO ROOM TO DROP IT
+  HERE". Nothing can be wedged into level geometry anymore. Quit-to-menu
+  still force-drops safely if the search fails.
+- First-run clarity: the debug HUD now DEFAULTS OFF (F1 brings it back;
+  existing settings.cfg files keep whatever they had). In its place, a
+  clean 8-second control hint fades in at the bottom on every spawn:
+  "WASD MOVE  E INTERACT  LMB ATTACK  RMB BLOCK  B SPAWN MENU  ESC MENU".
+  Stamina bar only shows while a melee weapon is held (the pistol never
+  spends it). Main-menu subtitle is now "FIRST-PERSON SANDBOX PROTOTYPE"
+  and the footer says plainly: local play, protocol reserved.
+
+SIMPLIFIED / HIDDEN (half-baked things that made it feel worse):
+- The 5-tab server-browser shell (Online/Favorites/LAN/History/Direct
+  Connect) is GONE from the UI. Four permanently-empty tabs of "nothing
+  here yet" made the game feel more unfinished, not more ambitious. The
+  Multiplayer screen is now ONE honest screen: server address box,
+  Connect (still reports the connection system does not exist),
+  localhost shortcut, and a single line - "online play arrives with the
+  networking milestone". The removed shell is trivial to resurrect from
+  git history when real discovery exists; ONLINE_SERVERS.md (the design
+  doc for that milestone) is untouched. mpTab_ and the SelectMpTab
+  button id were deleted outright, not commented out.
 
 VERIFIED THIS DROP
 ------------------
-- Clean /W4 build, zero warnings; client --world --frames 240 exit 0
-  (12 content defs), server --ticks 256 exit 0.
-- MANUALLY TESTED via scripted input this time (screen checked clear of
-  other apps first + focus-guarded so keystrokes could not leak into
-  another window like last session): spawned the duelist from the B menu,
-  held guard, attacked. Screenshots confirm: guard pose, stamina bar
-  draining at the guard-hold rate, a blocked bot hit costing exactly the
-  block price then regenerating on both sides, "WINDING UP STAB" readout
-  live, PHASE ACTIVE mid-swing pose, bronze bot clearly visible, ENTITIES
-  counting right, new hint lines correct.
-- Not captured in stills (fires between 700 ms samples, code-path only):
-  spark bursts, parry/counter toasts, kick-open moment. First human
-  playtest should feel those beats and judge the drag/accel arc width
-  (+/-32 degrees is a first guess - one constant in performMeleeStrike).
+- Clean /W4 build of client + server, zero warnings.
+- Smoke tests pass with a FRESH settings.cfg (exercises the new HUD
+  default): client --world --frames 240 exit 0, server --ticks 256 exit 0.
+- NOT visually verified this session: the user was actively using the
+  machine when the screenshot pass started, so it was aborted immediately
+  (a game window popping over someone mid-typing is worse than an
+  unverified gradient). Everything added draws through already-verified
+  paths (orientedBoxes, rect pipeline, HUD text), but the first human run
+  should eyeball: sky gradient colors, arena item placement (nothing
+  floating/intersecting), tracer look, sway/land-dip amounts.
 
-HOW TO TEST (2 minutes; also in README "Melee combat")
-------------------------------------------------------
-  1. run_windows.bat -> Singleplayer -> Start Test World (or --equip sword)
-  2. B -> BOTS -> DUELIST BOT, B to close. Aim at it: readout shows HP,
-     stamina, and what it is winding up.
-  3. Parry: tap RMB just before its red-blade moment -> RIPOSTE! prompt ->
-     click = fast protected riposte.
-  4. Counter: it winds up STAB (readout says so) -> wheel-down yourself as
-     the strike lands -> PERFECT COUNTER.
-  5. Jab: V the instant it starts winding -> "INTERRUPTED ITS ATTACK".
-  6. Kick: F while it holds its guard -> "GUARD KICKED OPEN" -> free hit.
-  7. Drag: start a slash aimed left of the bot, sweep your mouse across it
-     during the release - contact follows the blade, not the click.
-  8. Feel the commitment: whiff on purpose, swing into a crate, spam kicks.
-  9. Throw (Q), pick it back up with E - it stays in the world forever now.
+WHERE THE NUMBERS LIVE (for taste tuning)
+-----------------------------------------
+- Arena layout: Game::startTestWorld (game.cpp) - place() calls.
+- Sky colors: GLRenderer::drawSky (gl_renderer.cpp) - t[] / b[].
+- Sway/dip/bob strengths: the rootPos block in appendViewmodelDraws.
+- Tracer look: the Tracer block in tryAttack + the draw in
+  buildRenderFrame.
+- Footstep/land pitches: the tick loop in Game::update.
 
 UNFINISHED (known, deliberate)
 ------------------------------
-- No player health yet: bot hits are feedback (flash/shake/sound), not
-  death. Wire player HP + death/respawn when the mode needs it.
-- Bots do not move, feint, jab, kick, parry, or counter. Training partner
-  only; movement/AI is its own milestone.
-- Drag/accel affects contact TIMING only (the swept ray). No turn-cap or
-  windup rotation limits yet; add if real PvP shows ballerina spins.
-- Combat tuning constants live in melee.h, not data files, until balance
-  settles. Sound-event mapping still client code.
-- Server binary still does not simulate combat (module is shared + pure
-  and ready; lands with server-side simulation).
+- No player health; duel bot hits remain feedback-only training.
+- Melee kept in full (it is stable and tested); its controls are the
+  richest part of the game - the spawn hint plus F1 cover discovery.
+- Server binary still config-only; combat/sim wiring is the networking
+  milestone. Maps still code-built; music slider still drives nothing.
+- Load World list still caps at 7; fine until someone has 8 worlds.
 
 BROKEN / WATCH OUT
 ------------------
-- Two orphaned tacmove.exe instances (user playtest leftovers) held the
-  exe lock this session and had to be killed before linking. If a build
-  fails with LNK1104 on tacmove.exe, check Task Manager first.
-- The sweep means point-blank walls/props on your swing side eat the hit
-  early (by design - clang). If a future arena is very cramped, melee near
-  walls will feel restrictive; that is Chivalry-authentic but tunable via
-  the arc width.
-- resolveStrike outcome list grew (Interrupted, Deflected): any new caller
-  must handle them or the switch will not compile (deliberate - no default
-  case, so the compiler enforces completeness).
+- IAudio::playSound signature changed (added pitch with a default) - any
+  future IAudio implementation must match the two-argument form.
+- config/settings.cfg is gitignored but persists locally: your existing
+  file still has show_debug_hud from before, so YOU may still see the
+  debug HUD while fresh installs will not. Delete the file or press F1.
+- The test arena now adds entities every time it starts; if kMaxEntities
+  (256) ever feels tight in the arena, the furniture is the first 11.
 
 BUILD / RUN
 -----------

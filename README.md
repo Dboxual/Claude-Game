@@ -120,21 +120,21 @@ see [PORTING.md](PORTING.md)).
 ## Main menu, pause menu & settings
 
 The client boots to a **main menu** (over a slow orbit of the arena):
-**Singleplayer** (Start Test World, Create World, Load World),
-**Multiplayer** (a CS-style server-browser shell with **Online / Favorites /
-LAN / History / Direct Connect** tabs — the Online tab states plainly that
-an online list requires the master server backend described in
-[ONLINE_SERVERS.md](ONLINE_SERVERS.md), the other lists are honestly empty
-until server discovery exists, and Direct Connect's address box reports
-that the connection system is a later milestone; nothing is faked),
-**Settings**, and **Quit**. Every button press plays a small original UI
-click.
+**Singleplayer** (Start Test World — a furnished arena with a weapon rack,
+training corner, and props; Create World; Load World), **Multiplayer**
+(one honest screen: a direct-connect address box that reports the
+connection system is a later milestone — the server-browser shell returns
+when real discovery exists; see [ONLINE_SERVERS.md](ONLINE_SERVERS.md) for
+what that takes), **Settings**, and **Quit**. Every button press plays a
+small original UI click.
 
 In game, Esc pauses: the simulation freezes, the mouse unlocks, and the pause
 menu offers **Resume / Settings / Quit to Menu**. The settings screen is
 shared between the main menu and the pause menu: mouse sensitivity, FOV,
-master/music/SFX volume (stored now, audible once sounds exist), fullscreen,
-vsync, debug HUD, reset-to-defaults, and back.
+master/music/SFX volume (music is stored but nothing plays music yet),
+fullscreen, vsync, debug HUD (off by default — a spawn-time control hint
+covers the basics; F1 brings the dev overlay back), reset-to-defaults,
+and back.
 
 Settings persist to `config/settings.cfg` — created with defaults on first
 run, saved whenever you change something in the menu, loaded on startup, and

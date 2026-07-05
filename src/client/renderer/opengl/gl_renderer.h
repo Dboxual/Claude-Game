@@ -14,6 +14,7 @@ public:
     const char* name() const override { return "OpenGL 3.3"; }
 
 private:
+    void drawSky(const RenderFrame& frame);
     void drawBoxes(const RenderFrame& frame);
     void drawViewmodel(const RenderFrame& frame);
     void drawRects(const RenderFrame& frame);

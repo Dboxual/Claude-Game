@@ -198,8 +198,12 @@ void Game::beginSession() {
     heavyEligible_ = false;
     thrown_.clear();
     sparks_.clear();
+    tracers_.clear();
     bots_.clear();
     hitStop_ = shakeTime_ = shakeAmp_ = damageFlash_ = 0.0f;
+    swayX_ = swayY_ = landDipTimer_ = landDipAmount_ = 0.0f;
+    wasGrounded_ = true;
+    controlHintTimer_ = 8.0; // a few seconds of "here's how to play"
     carriedEntityId_ = 0;
     hudToast_.clear();
     hudToastTimer_ = 0.0;
@@ -212,6 +216,32 @@ void Game::beginSession() {
 
 void Game::startTestWorld() {
     world_.buildTestMap();
+
+    // Furnish the arena: it should demo every system - weapons to grab,
+    // things to fight, props to move - without ever opening the spawn
+    // menu. Test-arena pickups/bots respawn (this world is a persistent
+    // playground and is never saved); created worlds keep the
+    // nothing-respawns default.
+    auto place = [&](const char* id, glm::vec3 pos, float respawnSeconds) {
+        if (const EntityDef* def = content_.find(id)) {
+            world_.addEntity(*def, pos, respawnSeconds);
+        }
+    };
+    // Weapon rack: one pickup on each crate of the jump-reference row.
+    place("sword", {4.75f, 0.5f, -1.25f}, 15.0f);
+    place("glock", {7.75f, 1.0f, -1.25f}, 15.0f);
+    place("karambit", {10.75f, 1.5f, -1.25f}, 15.0f);
+    place("shield", {3.0f, 0.0f, -3.5f}, 15.0f);
+    // Training corner by the strafe pillars.
+    place("training_dummy", {-5.5f, 0.0f, -6.5f}, 10.0f);
+    place("duel_bot", {-8.5f, 0.0f, -5.5f}, 10.0f);
+    // Movable props near spawn (carry with E; a ready-made stack to break).
+    place("crate", {-2.5f, 0.0f, 3.0f}, 0.0f);
+    place("crate", {-2.5f, 1.0f, 3.0f}, 0.0f);
+    place("crate", {-3.8f, 0.0f, 3.4f}, 0.0f);
+    place("barrel", {2.6f, 0.0f, 4.2f}, 0.0f);
+    place("barrel", {3.5f, 0.0f, 4.8f}, 0.0f);
+
     currentWorldFile_.clear(); // the test arena is never saved
     currentWorldName_ = "TEST ARENA";
     beginSession();
@@ -333,8 +363,15 @@ void Game::loadContentFiles() {
     }
 }
 
-void Game::sfx(const char* soundName) const {
-    if (audio_) audio_->playSound(soundName);
+void Game::sfx(const char* soundName, float pitch) const {
+    if (audio_) audio_->playSound(soundName, pitch);
+}
+
+float Game::rand01() {
+    fxRng_ ^= fxRng_ << 13;
+    fxRng_ ^= fxRng_ >> 17;
+    fxRng_ ^= fxRng_ << 5;
+    return float(fxRng_ % 10000u) / 10000.0f;
 }
 
 void Game::updateCarriedProp() {
@@ -344,30 +381,62 @@ void Game::updateCarriedProp() {
         carriedEntityId_ = 0;
         return;
     }
-    // Float in front of the eye; the prop is non-colliding while carried.
-    glm::vec3 hold = eyePosition() + lookDirection() * 2.0f;
-    e->pos = hold - glm::vec3(0.0f, e->size.y * 0.5f, 0.0f);
+    // Float in front of the eye, pulled in when a wall is closer so the
+    // carried prop never sticks through geometry.
+    const glm::vec3 eye = eyePosition();
+    const glm::vec3 look = lookDirection();
+    float margin = glm::length(glm::vec3(e->size.x, 0.0f, e->size.z)) * 0.5f + 0.1f;
+    float geoT = world_.raycastGeometry(eye, look, 2.0f + margin);
+    float holdDist = glm::clamp(geoT - margin, 0.7f, 2.0f);
+    e->pos = eye + look * holdDist - glm::vec3(0.0f, e->size.y * 0.5f, 0.0f);
 }
 
 void Game::dropCarriedProp() {
     if (carriedEntityId_ == 0) return;
     WorldEntity* e = world_.entityById(carriedEntityId_);
-    carriedEntityId_ = 0;
-    if (!e) return;
-    e->carried = false;
+    if (!e) {
+        carriedEntityId_ = 0;
+        return;
+    }
 
-    // Settle onto whatever is below (floor, crate stack); props have no
-    // physics, so without this a drop would leave them hanging mid-air.
-    glm::vec3 from = e->pos + glm::vec3(0.0f, 0.05f, 0.0f);
-    glm::vec3 down(0.0f, -1.0f, 0.0f);
-    float t = world_.raycastGeometry(from, down, 50.0f);
-    World::EntityHit under = world_.raycastEntities(from, down, t, World::RayMask::AttackTargets);
-    if (under.index >= 0) t = under.t;
-    if (t > 0.05f && t < 50.0f) e->pos.y -= (t - 0.05f);
+    // Find a legal resting spot: from the hold point inward toward the
+    // player, settle each candidate onto whatever is below and take the
+    // first that fits without intersecting walls, props, or the player.
+    // Nothing ever gets wedged into geometry - if nowhere fits, keep
+    // carrying and say so.
+    const glm::vec3 eye = eyePosition();
+    const glm::vec3 look = lookDirection();
+    const glm::vec3 down(0.0f, -1.0f, 0.0f);
+    AABB playerBox{player_.pos - glm::vec3(0.5f, 0.0f, 0.5f),
+                   player_.pos + glm::vec3(0.5f, 2.0f, 0.5f)};
 
-    saveCurrentWorld();
-    sfx("pickup");
-    showToast("DROPPED " + toUpperAscii(e->defId));
+    const float tries[] = {2.0f, 1.4f, 0.9f, 0.6f};
+    for (float dist : tries) {
+        glm::vec3 center = eye + look * dist;
+        glm::vec3 pos = center - glm::vec3(0.0f, e->size.y * 0.5f, 0.0f);
+
+        // Settle downward (floor or the top of a stack).
+        glm::vec3 from = pos + glm::vec3(0.0f, 0.05f, 0.0f);
+        float t = world_.raycastGeometry(from, down, 50.0f);
+        World::EntityHit under =
+            world_.raycastEntities(from, down, t, World::RayMask::AttackTargets);
+        if (under.index >= 0) t = under.t;
+        if (t > 0.05f && t < 50.0f) pos.y -= (t - 0.05f);
+
+        glm::vec3 half(e->size.x * 0.5f, 0.0f, e->size.z * 0.5f);
+        AABB rest{pos - half + glm::vec3(0.0f, 0.01f, 0.0f),
+                  pos + glm::vec3(half.x, e->size.y - 0.01f, half.z)};
+        if (world_.overlapsAny(rest) || aabbOverlap(rest, playerBox)) continue;
+
+        e->pos = pos;
+        e->carried = false;
+        carriedEntityId_ = 0;
+        saveCurrentWorld();
+        sfx("pickup", 0.9f);
+        showToast("DROPPED " + toUpperAscii(e->defId));
+        return;
+    }
+    showToast("NO ROOM TO DROP IT HERE");
 }
 
 void Game::refreshWorldList() {
@@ -495,13 +564,26 @@ void Game::tryAttack() {
 
     attackCooldown_ = weapon->cooldownSeconds;
     muzzleFlashTimer_ = 0.07f;
-    sfx("gunshot");
+    sfx("gunshot", 0.96f + rand01() * 0.08f);
 
     const glm::vec3 eye = eyePosition();
     const glm::vec3 dir = lookDirection();
     float geoT = world_.raycastGeometry(eye, dir, weapon->range);
     World::EntityHit hit =
         world_.raycastEntities(eye, dir, geoT, World::RayMask::AttackTargets);
+
+    // Tracer + impact puff: the shot visibly travels and lands somewhere.
+    float endT = hit.index >= 0 ? hit.t : geoT;
+    glm::vec3 impact = eye + dir * endT;
+    glm::vec3 right = glm::normalize(glm::cross(dir, glm::vec3(0.0f, 1.0f, 0.0f)));
+    Tracer tr;
+    tr.from = eye + dir * 0.45f + right * 0.06f - glm::vec3(0.0f, 0.07f, 0.0f);
+    tr.to = impact;
+    tr.life = tr.total = 0.06f;
+    tracers_.push_back(tr);
+    if (endT < weapon->range) {
+        addSparks(impact, 3, {0.85f, 0.82f, 0.75f});
+    }
     if (hit.index < 0) return;
 
     const WorldEntity& target = world_.entities()[size_t(hit.index)];
@@ -905,7 +987,7 @@ void Game::updateThrownWeapons(float dt) {
                 landed = true;
             } else if (geoT < len) {
                 spawnDroppedWeapon(t.weaponId, t.pos + dir * std::max(0.0f, geoT - 0.05f));
-                sfx("footstep"); // clatter placeholder (original sound set)
+                sfx("footstep", 0.8f); // low clatter (original sound set)
                 landed = true;
             }
         }
@@ -1113,18 +1195,29 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     while (accumulator_ >= tickDt_ && tickSafety++ < 10) {
         pin.jump = jumpBufferTimer_ > 0.0 || (cfg_.autoBhop != 0.0f && in.jumpHeld);
         prevPos_ = player_.pos;
+        float fallSpeed = -player_.vel.y; // before the tick resolves the landing
         player_.tick(pin, world_, cfg_, float(tickDt_));
         world_.tick(float(tickDt_)); // entity respawns + hit-flash decay
 
-        // Footsteps: distance-based cadence, so walking naturally slows the
-        // rhythm and standing still is silent.
+        // Footsteps: distance-based cadence with a little pitch variation,
+        // so walking naturally slows the rhythm and never machine-guns.
         if (player_.grounded) {
             footstepDistance_ += player_.horizontalSpeed() * float(tickDt_);
             if (footstepDistance_ >= 2.1f) {
                 footstepDistance_ = 0.0f;
-                if (player_.horizontalSpeed() > 0.5f) sfx("footstep");
+                if (player_.horizontalSpeed() > 0.5f) {
+                    sfx("footstep", 0.92f + rand01() * 0.16f);
+                }
             }
         }
+
+        // Landing: a low thud and a brief viewmodel dip scaled by the fall.
+        if (!wasGrounded_ && player_.grounded && fallSpeed > 3.0f) {
+            sfx("footstep", 0.70f);
+            landDipAmount_ = glm::clamp(fallSpeed / 14.0f, 0.25f, 1.0f);
+            landDipTimer_ = 0.26f;
+        }
+        wasGrounded_ = player_.grounded;
 
         if (player_.justJumped) jumpBufferTimer_ = -1.0;
         jumpBufferTimer_ -= tickDt_;
@@ -1151,6 +1244,21 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     bobIntensity_ += ((bobbing ? std::min(hSpeed / cfg_.runSpeed, 1.15f) : 0.0f) - bobIntensity_)
                      * std::min(1.0f, 8.0f * float(frameDt));
     if (bobbing) bobPhase_ += hSpeed * 1.5f * float(frameDt);
+
+    // Look sway: the hands lag a beat behind the camera, then settle.
+    float swayTX = glm::clamp(in.lookDx * 0.05f, -1.5f, 1.5f);
+    float swayTY = glm::clamp(in.lookDy * 0.05f, -1.2f, 1.2f);
+    swayX_ += (swayTX - swayX_) * std::min(1.0f, 10.0f * float(frameDt));
+    swayY_ += (swayTY - swayY_) * std::min(1.0f, 10.0f * float(frameDt));
+    landDipTimer_ = std::max(0.0f, landDipTimer_ - float(frameDt));
+    if (controlHintTimer_ > 0.0) controlHintTimer_ -= frameDt;
+
+    // Bullet tracers fade fast.
+    for (size_t i = 0; i < tracers_.size();) {
+        tracers_[i].life -= dt;
+        if (tracers_[i].life <= 0.0f) tracers_.erase(tracers_.begin() + long(i));
+        else ++i;
+    }
 
     // Weapon switch (slot key or pickup) plays the raise animation and
     // cancels any in-flight attack from the previous weapon.
@@ -1210,10 +1318,6 @@ void Game::activateButton(UiButton::Id id, int payload) {
     case Id::LoadWorldEntry: loadWorld(payload); break;
 
     // Multiplayer (networking is a later milestone; protocol.h reserves v1).
-    case Id::SelectMpTab:
-        mpTab_ = payload;
-        menuStatus_.clear();
-        break;
     case Id::Connect:
     case Id::QuickLocalhost:
         if (id == Id::QuickLocalhost) serverAddress_ = "127.0.0.1:27015";
@@ -1224,6 +1328,12 @@ void Game::activateButton(UiButton::Id id, int payload) {
     case Id::Resume: ui_ = UiScreen::None; break;
     case Id::QuitToMenu:
         dropCarriedProp(); // settle + persist a held prop before leaving
+        if (carriedEntityId_ != 0) { // nowhere legal to drop: set it down as-is
+            if (WorldEntity* held = world_.entityById(carriedEntityId_)) {
+                held->carried = false;
+            }
+            carriedEntityId_ = 0;
+        }
         saveCurrentWorld();
         currentWorldFile_.clear();
         inGame_ = false;
@@ -1345,34 +1455,16 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         break;
     }
 
-    case UiScreen::Multiplayer: {
-        // CS-style server browser shell. The tabs are real; the lists are
-        // honestly empty until server discovery exists (no fake servers).
-        static const char* kMpTabs[] = {"ONLINE", "FAVORITES", "LAN", "HISTORY",
-                                        "DIRECT CONNECT"};
-        constexpr int kMpTabCount = 5;
-        const float tabW = 170.0f, tabH = 40.0f, tabGap = 10.0f;
-        float tabX = cx - (kMpTabCount * tabW + (kMpTabCount - 1) * tabGap) / 2;
-        const float tabY = viewportH * 0.22f;
-        for (int i = 0; i < kMpTabCount; ++i) {
-            buttons.push_back({Id::SelectMpTab, tabX, tabY, tabW, tabH,
-                               kMpTabs[i], true, i, i == mpTab_});
-            tabX += tabW + tabGap;
-        }
-
-        if (mpTab_ == 4) { // Direct Connect: address box + actions
-            column(viewportH * 0.46f, {
-                {Id::Connect, 0, 0, 0, 0, "CONNECT", true},
-                {Id::QuickLocalhost, 0, 0, 0, 0, "LOCALHOST 127.0.0.1", true},
-                {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
-            });
-        } else {
-            column(viewportH * 0.62f, {
-                {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
-            });
-        }
+    case UiScreen::Multiplayer:
+        // One honest screen: a direct-connect address box and nothing that
+        // pretends. The server-browser shell (tabs for online/LAN/favorites)
+        // comes back when there is real discovery to put in it.
+        column(viewportH * 0.44f, {
+            {Id::Connect, 0, 0, 0, 0, "CONNECT", true},
+            {Id::QuickLocalhost, 0, 0, 0, 0, "LOCALHOST 127.0.0.1", true},
+            {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
+        });
         break;
-    }
 
     case UiScreen::PauseMain:
         column(viewportH * 0.40f, {
@@ -1627,6 +1719,22 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
              glm::vec3(0.0f), {sz, sz, sz}, p.color, 1.0f);
     }
 
+    // Bullet tracers: a bright thinning line from muzzle to impact.
+    for (const Tracer& t : tracers_) {
+        glm::vec3 seg = t.to - t.from;
+        float len = glm::length(seg);
+        if (len < 0.05f) continue;
+        glm::vec3 d = seg / len;
+        float yawDeg = glm::degrees(std::atan2(d.x, -d.z));
+        float pitchDeg = glm::degrees(std::asin(glm::clamp(d.y, -1.0f, 1.0f)));
+        float thick = 0.012f * (t.life / t.total) + 0.003f;
+        glm::mat4 group =
+            vmCompose(glm::translate(glm::mat4(1.0f), (t.from + t.to) * 0.5f),
+                      glm::vec3(0.0f), {pitchDeg, yawDeg, 0.0f});
+        obox(group, {0, 0, 0}, {0, 0, 0}, {thick, thick, len},
+             {1.0f, 0.92f, 0.62f}, 1.0f);
+    }
+
     if (uiActive()) {
         appendMenuDraws(frame);
     } else {
@@ -1820,9 +1928,19 @@ void Game::appendHudDraws(RenderFrame& frame) const {
                      hudToast_);
     }
 
-    // Stamina bar: the melee resource. Green when healthy, red and angrier
-    // once low stamina starts weakening the guard.
-    {
+    // First-spawn control hint: a few seconds of "here's how to play" so a
+    // fresh player never needs the debug HUD to find the keys.
+    if (controlHintTimer_ > 0.0) {
+        float a = float(glm::clamp(controlHintTimer_ / 1.5, 0.0, 1.0)); // fade out
+        centeredLine(viewportH - 96.0f, 2.0f, glm::vec4(0.9f, 0.93f, 1.0f, a),
+                     "WASD MOVE   E INTERACT   LMB ATTACK   RMB BLOCK   B SPAWN MENU   ESC MENU");
+    }
+
+    // Stamina bar: the melee resource. Only shown when a melee weapon is
+    // in hand (the pistol does not spend it). Green when healthy, red and
+    // angrier once low stamina starts weakening the guard.
+    const WeaponDef* equippedW = content_.findWeapon(inventory_.equippedId());
+    if (equippedW && equippedW->kind == WeaponKind::Melee) {
         const float sw = 260.0f, sh = 8.0f;
         const float sx = cx - sw / 2.0f, sy = viewportH - 70.0f;
         frame.rects.push_back({sx - 2.0f, sy - 2.0f, sw + 4.0f, sh + 4.0f,
@@ -1955,14 +2073,23 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
     }
 
     // Root: walk bob (phase locked to the footstep cadence), a slow idle
-    // breath, and the equip animation raising the weapon from below.
-    glm::vec3 rootPos(std::sin(bobPhase_) * 0.013f * bobIntensity_,
+    // breath, look sway (the hands lag a beat behind the camera), a dip
+    // when landing a fall, and the equip animation raising from below.
+    float landDip = 0.0f;
+    if (landDipTimer_ > 0.0f) {
+        landDip = std::sin((landDipTimer_ / 0.26f) * 3.14159f) * landDipAmount_;
+    }
+    glm::vec3 rootPos(std::sin(bobPhase_) * 0.013f * bobIntensity_
+                          - swayX_ * 0.010f,
                       -std::abs(std::sin(bobPhase_)) * 0.011f * bobIntensity_
                           - 0.004f * std::sin(float(menuTime_) * 1.6f)
+                          + swayY_ * 0.008f - landDip * 0.07f
                           - lower * lower * 0.30f,
                       0.0f);
     glm::mat4 root = vmCompose(glm::mat4(1.0f), rootPos,
-                               {lower * -35.0f, 0.0f, lower * 12.0f});
+                               {lower * -35.0f - landDip * 6.0f + swayY_ * 1.2f,
+                                swayX_ * -1.6f,
+                                lower * 12.0f + swayX_ * 1.1f});
 
     // A clenched fist with the forearm sleeve running down off-screen.
     auto fistAndArm = [&](glm::vec3 pos, glm::vec3 rotDeg, bool left) {
@@ -2140,8 +2267,8 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
     case UiScreen::MainMenu:
         centeredText(cx, viewportH * 0.16f, 6.0f, white, "TACMOVE");
         centeredText(cx, viewportH * 0.16f + 52.0f, 2.0f, dimText,
-                     "EARLY SANDBOX FOUNDATION - PHASE 1");
-        std::snprintf(buf, sizeof(buf), "PROTOCOL V%d - NETWORKING NOT IMPLEMENTED YET",
+                     "FIRST-PERSON SANDBOX PROTOTYPE");
+        std::snprintf(buf, sizeof(buf), "LOCAL PLAY - PROTOCOL V%d RESERVED FOR NETWORKING",
                       net::kProtocolVersion);
         centeredText(cx, viewportH - 34.0f, 2.0f, dimText, buf);
         break;
@@ -2203,51 +2330,27 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         centeredText(cx, viewportH * 0.88f, 2.0f, notice, menuStatus_);
     }
 
-    // Multiplayer: tab body. Direct Connect has the address box; the list
-    // tabs state plainly that nothing is discoverable yet - no fake servers.
+    // Multiplayer: direct-connect address box plus one honest status line.
     if (ui_ == UiScreen::Multiplayer) {
-        if (mpTab_ == 4) {
-            float boxX = cx - kAddressBoxW / 2;
-            float boxY = viewportH * 0.32f;
-            centeredText(cx, boxY - 26.0f, 2.0f, label, "SERVER ADDRESS");
-            frame.rects.push_back({boxX, boxY, kAddressBoxW, kAddressBoxH,
-                                   glm::vec4(0.10f, 0.12f, 0.16f, 0.95f)});
-            frame.rects.push_back({boxX, boxY + kAddressBoxH - 3.0f, kAddressBoxW, 3.0f,
-                                   glm::vec4(0.45f, 0.55f, 0.70f, 1.0f)}); // underline accent
-            std::string shown = serverAddress_;
-            if (std::fmod(menuTime_, 1.0) < 0.55) shown += "_"; // blinking caret
-            TextDraw addr;
-            addr.x = boxX + 12.0f;
-            addr.y = boxY + (kAddressBoxH - 14.0f) / 2;
-            addr.scale = 2.0f;
-            addr.color = white;
-            addr.text = std::move(shown);
-            frame.texts.push_back(std::move(addr));
-        } else {
-            const char* line1 = "";
-            const char* line2 = "";
-            switch (mpTab_) {
-            case 0:
-                line1 = "ONLINE SERVER LIST REQUIRES MASTER SERVER BACKEND";
-                line2 = "SEE ONLINE_SERVERS.MD FOR WHAT THAT TAKES - NO SERVERS ARE FAKED HERE";
-                break;
-            case 1:
-                line1 = "NO FAVORITES YET";
-                line2 = "SERVERS CAN BE FAVORITED ONCE JOINING THEM EXISTS";
-                break;
-            case 2:
-                line1 = "NO SERVERS FOUND";
-                line2 = "LAN DISCOVERY IS NOT IMPLEMENTED YET";
-                break;
-            default:
-                line1 = "NO HISTORY";
-                line2 = "PAST CONNECTIONS WILL SHOW UP HERE";
-                break;
-            }
-            centeredText(cx, viewportH * 0.40f, 2.5f, dimText, line1);
-            centeredText(cx, viewportH * 0.40f + 30.0f, 2.0f, dimText, line2);
-        }
+        float boxX = cx - kAddressBoxW / 2;
+        float boxY = viewportH * 0.27f;
+        centeredText(cx, boxY - 26.0f, 2.0f, label, "SERVER ADDRESS");
+        frame.rects.push_back({boxX, boxY, kAddressBoxW, kAddressBoxH,
+                               glm::vec4(0.10f, 0.12f, 0.16f, 0.95f)});
+        frame.rects.push_back({boxX, boxY + kAddressBoxH - 3.0f, kAddressBoxW, 3.0f,
+                               glm::vec4(0.45f, 0.55f, 0.70f, 1.0f)}); // underline accent
+        std::string shown = serverAddress_;
+        if (std::fmod(menuTime_, 1.0) < 0.55) shown += "_"; // blinking caret
+        TextDraw addr;
+        addr.x = boxX + 12.0f;
+        addr.y = boxY + (kAddressBoxH - 14.0f) / 2;
+        addr.scale = 2.0f;
+        addr.color = white;
+        addr.text = std::move(shown);
+        frame.texts.push_back(std::move(addr));
 
+        centeredText(cx, viewportH * 0.72f, 2.0f, dimText,
+                     "ONLINE PLAY ARRIVES WITH THE NETWORKING MILESTONE");
         if (!menuStatus_.empty()) {
             centeredText(cx, viewportH * 0.85f, 2.0f, notice, menuStatus_);
         }

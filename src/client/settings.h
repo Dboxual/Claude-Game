@@ -16,7 +16,7 @@ struct GameSettings {
     float sfxVolume = 1.0f;
     bool fullscreen = false;
     bool vsync = true;
-    bool showDebugHud = true;
+    bool showDebugHud = false; // dev overlay; F1 toggles it on when wanted
 
     void applyFrom(const ConfigFile& cfg);
     std::string serialize() const; // config-file text, comments included

@@ -52,7 +52,7 @@ bool SdlAudio::loadSound(const std::string& name, const std::string& path) {
     return true;
 }
 
-void SdlAudio::playSound(const std::string& name) {
+void SdlAudio::playSound(const std::string& name, float pitch) {
     if (!device_) return;
     auto it = sounds_.find(name);
     if (it == sounds_.end()) return; // missing sounds are a silent no-op
@@ -78,6 +78,7 @@ void SdlAudio::playSound(const std::string& name) {
 
     SDL_SetAudioStreamFormat(voice, &sound.spec, nullptr);
     SDL_SetAudioStreamGain(voice, masterVolume_ * sfxVolume_);
+    SDL_SetAudioStreamFrequencyRatio(voice, SDL_clamp(pitch, 0.25f, 4.0f));
     SDL_PutAudioStreamData(voice, sound.data.data(), int(sound.data.size()));
 }
 

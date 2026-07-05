@@ -40,7 +40,7 @@ public:
     // input, quit ends the loop, dirty settings get re-applied.
     bool uiActive() const { return ui_ != UiScreen::None; }
     bool wantsTextInput() const {
-        return (ui_ == UiScreen::Multiplayer && mpTab_ == 4) || ui_ == UiScreen::CreateWorld;
+        return ui_ == UiScreen::Multiplayer || ui_ == UiScreen::CreateWorld;
     }
     bool quitRequested() const { return quitRequested_; }
     const GameSettings& settings() const { return settings_; }
@@ -74,8 +74,8 @@ private:
             StartTestWorld, OpenCreateWorld, OpenLoadWorld, BackToMain,
             // create/load world screens
             ConfirmCreateWorld, LoadWorldEntry, BackToSingleplayer,
-            // multiplayer screen (server browser shell)
-            SelectMpTab, Connect, QuickLocalhost,
+            // multiplayer screen (direct connect only until networking lands)
+            Connect, QuickLocalhost,
             // pause menu
             Resume, QuitToMenu,
             // dev spawn menu
@@ -120,7 +120,8 @@ private:
     void updateCarriedProp();
     void dropCarriedProp();
     void showToast(std::string text);
-    void sfx(const char* soundName) const; // no-op without an audio backend
+    void sfx(const char* soundName, float pitch = 1.0f) const; // no-op without audio
+    float rand01(); // cheap deterministic rng for sound/fx variation
 
     // Melee combat (client side of shared/melee: inputs, targeting, feedback).
     void updateMelee(const InputState& in, float dt);
@@ -218,13 +219,31 @@ private:
     float shakeTotal_ = 1.0f;
     float shakeAmp_ = 0.0f;
     float damageFlash_ = 0.0f;  // red vignette after the player is struck
+
+    // Bullet tracers (Glock): a bright line from muzzle to impact, gone in
+    // a few hundredths of a second - shots visibly travel somewhere.
+    struct Tracer {
+        glm::vec3 from{0.0f};
+        glm::vec3 to{0.0f};
+        float life = 0.0f;
+        float total = 0.06f;
+    };
+    std::vector<Tracer> tracers_;
+
+    // Feel-polish state: look sway, landing dip, first-spawn control hint.
+    float swayX_ = 0.0f;            // smoothed horizontal look velocity
+    float swayY_ = 0.0f;
+    float landDipTimer_ = 0.0f;     // viewmodel dip after landing a fall
+    float landDipAmount_ = 0.0f;
+    bool wasGrounded_ = true;
+    double controlHintTimer_ = 0.0; // "WASD MOVE / E INTERACT / ..." on spawn
+    unsigned fxRng_ = 0xBEEF5EEDu;  // tiny rng for sound pitch variation
     unsigned carriedEntityId_ = 0;  // world id of the carried prop; 0 = none
     std::string hudToast_;          // transient gameplay message
     double hudToastTimer_ = 0.0;
     World::EntityHit aimInteract_;  // pickup/carryable under the crosshair, in range
     World::EntityHit aimInfo_;      // damageable entity under the crosshair
     int spawnCategory_ = 0;         // int(ContentCategory) of the open tab
-    int mpTab_ = 4;                 // server browser tab; 4 = Direct Connect
 
     float yaw_ = 0.0f;
     float pitch_ = 0.0f;
