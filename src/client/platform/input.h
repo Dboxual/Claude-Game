@@ -26,6 +26,7 @@ struct InputState {
     bool interactPressed = false;  // E: pick up / use what the player looks at
     bool attackPressed = false;    // left mouse edge (gameplay attack)
     bool kickPressed = false;      // F: kick (opens raised guards)
+    bool jabPressed = false;       // V: short pommel bash (interrupts windups)
     bool throwPressed = false;     // Q: throw the held melee weapon
     bool feintPressed = false;     // R or middle mouse: cancel the windup
     bool altAttackPressed = false; // Left Alt or mouse side button: alternate slash

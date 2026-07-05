@@ -182,19 +182,22 @@ std::vector<float> dummyHit() {
     return buf;
 }
 
-// Melee hit: sharper and brighter than the dummy thud - a high crack (noise
-// above 1.2 kHz) over a short 200 Hz knock.
+// Melee body hit: DEEP and meaty - a pitch-dropping low thump that carries
+// the weight of the blow, with just enough crack on top to mark the moment
+// of contact. This is the "the blade connected with something" sound.
 std::vector<float> meleeHit() {
-    auto buf = makeBuffer(0.14f);
+    auto buf = makeBuffer(0.22f);
     Rng rng; OnePole lp;
     for (size_t i = 0; i < buf.size(); ++i) {
         float t = float(i) / kRate;
+        float f = 150.0f - 65.0f * std::min(t / 0.11f, 1.0f);
+        float thump = std::sin(2 * 3.14159265f * f * t) * envExp(t, 0.075f);
         float n = rng.next();
-        float crack = (n - lp.step(n, 1200.0f)) * envExp(t, 0.012f) * 1.1f;
-        float knock = std::sin(2 * 3.14159265f * 200.0f * t) * envExp(t, 0.04f) * 0.8f;
-        buf[i] = std::tanh((crack + knock) * 1.5f);
+        float crack = (n - lp.step(n, 1500.0f)) * envExp(t, 0.008f) * 0.6f;
+        float body = lp.y * envExp(t, 0.03f) * 0.4f; // filtered tail thickens it
+        buf[i] = std::tanh((thump + crack + body) * 1.7f);
     }
-    finalize(buf, 0.70f);
+    finalize(buf, 0.80f);
     return buf;
 }
 

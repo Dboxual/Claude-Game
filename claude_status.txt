@@ -1,148 +1,122 @@
-TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 4)
+TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 5)
 ============================================================================
 
-Fourth drop on this branch: skill-based melee combat prototype (stamina,
-attack phases, parry/riposte/perfect counter, feints, kick, shield, weapon
-throwing, duelist training bot). Original design in the spirit of heavy
-medieval duel games - no copied values, assets, names, or sounds from any
-game. Written by Claude on Windows 11 (MSVC, RTX 4060 Ti).
+Fifth drop on this branch: the melee rework. Update 4 built the skeleton
+(stamina/phases/parry); this drop makes it FEEL like a duel, following the
+Chivalry 2 mechanic STRUCTURE (read -> react -> punish -> stamina pressure
+-> finish) with entirely original values, names, code, sounds and visuals.
+Written by Claude on Windows 11 (MSVC, RTX 4060 Ti).
 
 DONE THIS DROP (built on Windows x64, client + server, /W4 zero warnings)
 --------------------------------------------------------------------------
-- NEW shared module src/shared/melee.{h,cpp}: the whole combat exchange as
-  pure state + pure functions (Actor struct, tick, startAttack, feint,
-  upgradeToHeavy, setBlock, resolveStrike). No IO, no pointers, no content
-  lookups - deliberately server-serializable so the future authoritative
-  server ticks the same code per player. All tuning constants sit at the
-  top of melee.h in one block.
-- Stamina: 100 max, regen 32/s after 0.9 s, paused while the guard is up
-  or staggered. Spent by attacks, feints, kicks, throws, and TAKEN blocked
-  hits. Below 30 blocks cost 1.5x; a block that drains to zero = GUARD
-  BREAK (1.4 s stagger, stamina refunds to 15 so play resumes).
-- Attack phases: windup -> active (the hit window sweeps until it connects
-  once) -> recovery, with a combo window in the last 45% of recovery
-  (windup x0.65, +2 stamina per chain depth, cap 3). Weapon `weight`
-  (new WeaponDef field + cfg key: fists 0.6, karambit 0.75, sword 1.0)
-  scales windup/recovery/stamina, so the sword is heavy and fists snap.
-- Attacks: SlashLeft/SlashRight (LMB alternates sides; Alt or mouse-X1
-  forces the other side), Overhead (wheel up), Stab (wheel down), heavy
-  (hold LMB through the windup: +0.22 s windup, 1.6x damage, 1.8x cost),
-  Kick (F: 1.3 m, 1.2 s cooldown, opens raised guards - 1.0 s stagger and
-  -15 stamina - but only 5 damage on bodies).
-- Defense: RMB holds the guard (only protects while Idle - attacking drops
-  it). Guard raised within 150 ms of impact = PARRY: attacker staggers
-  1.1 s, defender pays 3 stamina, riposte window 0.8 s (next attack winds
-  x0.55 and deals x1.25). Late/held blocks are safe but cost 12/20
-  (light/heavy) stamina. PERFECT COUNTER: winding up the SAME attack type
-  as the incoming strike deflects it for free, staggers the attacker
-  1.3 s, and accelerates your attack into a riposte.
-- Feint: R or middle mouse cancels the windup for 5 stamina into a 0.18 s
-  recovery whose combo window opens fast - cancel INTO another attack;
-  stamina is the anti-spam, no free cancels.
-- Shield: gear pickup (new `gear = 1` entity flag + EntityDef/WorldEntity
-  field so the E-interact ray sees it). Rides along with any melee weapon:
-  blocked hits cost x0.6, raised shield forces walk speed (PlayerInput
-  walk flag - no new physics), regen pauses while raised, kick opens it.
-  Left-arm viewmodel: wooden face + steel boss/rims, raises to cover the
-  view, droops when the guard is smashed.
-- Throw: Q throws the held melee weapon (never fists, never the glock).
-  8 stamina, 15 m/s with a small lob, gravity 20, tumbles end-over-end
-  (drawn from the pickup's own visual parts via the new world-space
-  orientedBoxes render path). Body hit = 1.1x weapon damage; a raised bot
-  guard swats it away; wherever it stops it becomes a normal pickup
-  (respawn 0) you can E back into your inventory. Inventory grew
-  removeEquipped() for this.
-- Duelist Bot (new entity: builtin + server/content/entities/duel_bot.cfg,
-  150 HP, respawns 6 s): the sparring partner. Client-side decision loop
-  ("no full AI"): near the player it starts a random slow attack (its
-  actor runs weight 1.7) every ~1.7-3 s, telegraphed two ways - the blade
-  visibly winds to the side the cut comes from (amber as it charges, red
-  in the hit window) and a windup_cue sound fires exactly at windup start.
-  After attacking it sometimes holds a 2.6 s guard (plain block, never
-  parries, never counters - Actor.counters=false). It has its own stamina:
-  blocked hits drain it, kicks open it, zero breaks it. Aiming at it reads
-  health + stamina + GUARDING/WINDING UP/STAGGERED.
-- Feedback: spark particles on every clash (emissive world-space cubes),
-  hit-stop on clean hits (sim clock x0.08 for ~50-90 ms; mouse look stays
-  realtime), screen shake on heavies/guard breaks (decaying eye wobble),
-  red damage flash when struck, stamina bar (green/red/orange by state),
-  toasts for PARRY / PERFECT COUNTER / GUARD BROKEN / GUARD KICKED OPEN.
-- 7 NEW original sounds (block, parry, shield_block, kick_hit,
-  guard_break, throw, windup_cue) added to tools/generate_sounds.cpp -
-  same deterministic sine/noise synthesis, zero third-party material -
-  regenerated into server/content/sounds/ and all rows added to
-  CREDITS.md. Distinct by design: parry rings bright, block knocks dull,
-  shield thuds woody, guard break falls apart.
-- Viewmodel: melee animation is now driven by the shared actor's phase
-  with per-attack keyframes (pull back through windup, sweep to strike,
-  settle through recovery) applied to every melee weapon's group - fists
-  hook/hammer/jab with the same keys the sword slashes with. Weapon guard
-  pose, shield raise/droop, stagger wobble, and a first-person kick boot
-  driving up from the bottom of the screen.
-- Input: RMB block held state, LMB held (heavy charge), mouse wheel,
-  Alt / mouse-X1, F kick, R / MMB feint, Q throw. THE SPAWN MENU MOVED
-  FROM Q TO B (Q is throw now) - README and all in-game hints updated.
-- Glock untouched gameplay-wise (hitscan path split into its own
-  tryAttack guard); dummy_hit stays the bullet-impact sound.
-- CMake: melee.cpp added to tac_shared; _CRT_SECURE_NO_WARNINGS defined
-  for MSVC (portable sscanf in the config parsers; the _s variants are
-  Microsoft-only).
+- THE BLADE TRAVELS THROUGH SPACE (the big feel fix): during the release,
+  the strike ray is no longer the crosshair - it SWEEPS. Slashes arc +/-32
+  degrees across the view (left slash crosses left->right, right slash the
+  mirror), overheads sweep +28 -> -22 degrees top to bottom, stabs/jabs
+  thrust straight. Contact lands where the blade actually is, sparks and
+  all. Because the sweep is camera-relative this IS drag/accel: turning
+  into your swing connects earlier, dragging away delays it. ~20 lines in
+  performMeleeStrike (game.cpp), zero new systems.
+- Commitment / no free spam: whiffed swings recover x1.2 (kicks x1.5,
+  melee.cpp tick); swinging into walls, crates or barrels now CLANGS -
+  sound, sparks, bounce recovery (melee::bounceOff) instead of a silent
+  no-op. Combo chains still cost escalating stamina.
+- JAB (V key, new Attack::Jab): 0.13 s windup pommel bash, 3 damage,
+  7 stamina, 0.9 s cooldown, 1.5 m. Interrupts windups (new outcome
+  Outcome::Interrupted, 0.55 s flinch) to stop pressure and reset tempo;
+  just thuds into guards (cheap 4-stamina block for the defender). Any
+  clean hit on a winding-up defender now reports Interrupted, so normal
+  swings also read as "you got interrupted" both ways.
+- RIPOSTE is now visibly a reward: a big gold "RIPOSTE!" prompt sits above
+  the crosshair for the whole 0.9 s window, and ripostes are PROTECTED -
+  strikes into a riposte windup get deflected (new Outcome::Deflected:
+  attacker bounces + pays, defender loses nothing, toast explains it).
+  Kicks/jabs cannot interrupt a riposte either (they fall through).
+- Counter language is taught, not guessed: aiming at the bot during its
+  windup names the attack ("WINDING UP STAB" in the readout). Answer with
+  the same attack type -> PERFECT COUNTER (unchanged rules from update 4:
+  attacker staggered 1.3 s, your windup accelerates into a riposte).
+- Stamina pressure: holding the guard up now drains 2/s (3/s with shield)
+  on top of pausing regen - turtling loses the stamina war. Per-attack
+  block costs moved into the spec table (slash 12 / overhead 16 / stab 10 /
+  jab 4, heavies x1.6, shield x0.6, low-stamina x1.5). Timings slowed to
+  duel weight: sword slash 0.35 windup / 0.18 release / 0.42 recover,
+  overhead 0.42/0.16/0.48, stab 0.30/0.12/0.38 (x weapon weight).
+- Impact reactions: damageable entities FLINCH - the visual-part stack
+  leans away from the player on a hit (taller parts lean further, so the
+  whole thing tips) and a staggered duelist reels back for the entire
+  stagger. Combined with hit-stop + the new deeper melee_hit (150->85 Hz
+  pitch-dropping thump regenerated in tools/generate_sounds.cpp), clean
+  hits finally land ON something.
+- Bot timing polish: its strike now lands 35% into the hit window (the
+  blade has visibly turned red by then), giving honest parry timing.
+  Recolored bronze (builtin + duel_bot.cfg) because the old slate armor
+  camouflaged against the arena walls - reading the bot IS the gameplay.
+- RESPAWN DEFAULTS FIXED (the second half of the task): respawn_seconds
+  is now 0 for EVERYTHING - weapon pickups, shield, training dummy, duel
+  bot (builtins + all cfg files). Taken/destroyed means gone unless a def
+  or a per-entity world-save line opts in. Thrown/dropped weapons already
+  spawned with respawn 0 and stay in the world until re-taken. Docs
+  updated (content.h comment, server/README.md, README.md).
 
 VERIFIED THIS DROP
 ------------------
-- Clean /W4 build of client + server, zero warnings.
-- Smoke tests pass: tacmove --world --frames 240 exit 0 (12 content defs
-  loaded - duel_bot and shield picked up from server/content/), server
-  --ticks 256 exit 0.
-- Sound tool re-run: all 14 wavs regenerate deterministically.
-- NOT verified visually this session: the scripted screenshot pass was
-  aborted because another game (Chivalry 2) was running fullscreen on the
-  machine and the injected test input would have gone into that session.
-  Combat geometry/animation values are therefore hand-derived from the
-  (screenshot-verified) update-3 viewmodel coordinate space but have NOT
-  been eyeballed in motion. First manual playtest should sanity-check:
-  block pose, shield raise, kick boot, bot blade telegraph positions.
+- Clean /W4 build, zero warnings; client --world --frames 240 exit 0
+  (12 content defs), server --ticks 256 exit 0.
+- MANUALLY TESTED via scripted input this time (screen checked clear of
+  other apps first + focus-guarded so keystrokes could not leak into
+  another window like last session): spawned the duelist from the B menu,
+  held guard, attacked. Screenshots confirm: guard pose, stamina bar
+  draining at the guard-hold rate, a blocked bot hit costing exactly the
+  block price then regenerating on both sides, "WINDING UP STAB" readout
+  live, PHASE ACTIVE mid-swing pose, bronze bot clearly visible, ENTITIES
+  counting right, new hint lines correct.
+- Not captured in stills (fires between 700 ms samples, code-path only):
+  spark bursts, parry/counter toasts, kick-open moment. First human
+  playtest should feel those beats and judge the drag/accel arc width
+  (+/-32 degrees is a first guess - one constant in performMeleeStrike).
 
-HOW TO TEST THE NEW SYSTEMS (manual, 2 minutes)
------------------------------------------------
-  1. run_windows.bat, Singleplayer -> Start Test World (or --equip sword).
-  2. B -> Bots -> DUELIST BOT (spawns ahead), B to close.
-  3. Parry: wait for its windup cue sound / amber blade, tap RMB just
-     before the strike -> sparks + ring + "PARRY - RIPOSTE NOW"; click
-     within 0.8 s for the fast riposte.
-  4. Perfect counter: when it winds up an overhead (blade high), answer
-     with wheel-up as the strike lands (same type) -> "PERFECT COUNTER".
-  5. Kick: wait for it to hold its guard (blade across its front), walk in,
-     F -> "GUARD KICKED OPEN", then hit it free.
-  6. Guard break (yours): hold RMB and eat hits until stamina empties.
-  7. Shield: B -> Pickups -> SHIELD, E to grab, hold RMB (cheaper blocks,
-     slower walk); its kick/guard-break rules match the weapon guard.
-  8. Throw: with sword/karambit held, Q -> it arcs, tumbles, hits (or is
-     swatted by a raised guard), lands as a pickup; E takes it back.
+HOW TO TEST (2 minutes; also in README "Melee combat")
+------------------------------------------------------
+  1. run_windows.bat -> Singleplayer -> Start Test World (or --equip sword)
+  2. B -> BOTS -> DUELIST BOT, B to close. Aim at it: readout shows HP,
+     stamina, and what it is winding up.
+  3. Parry: tap RMB just before its red-blade moment -> RIPOSTE! prompt ->
+     click = fast protected riposte.
+  4. Counter: it winds up STAB (readout says so) -> wheel-down yourself as
+     the strike lands -> PERFECT COUNTER.
+  5. Jab: V the instant it starts winding -> "INTERRUPTED ITS ATTACK".
+  6. Kick: F while it holds its guard -> "GUARD KICKED OPEN" -> free hit.
+  7. Drag: start a slash aimed left of the bot, sweep your mouse across it
+     during the release - contact follows the blade, not the click.
+  8. Feel the commitment: whiff on purpose, swing into a crate, spam kicks.
+  9. Throw (Q), pick it back up with E - it stays in the world forever now.
 
 UNFINISHED (known, deliberate)
 ------------------------------
-- No player health: getting hit is feedback (flash/shake/sound), not
-  death. Bot damage numbers exist in the exchange but land on nothing.
-- Bots do not move, kick, feint, parry, or counter - training partner
-  only, full AI is a later milestone.
-- Sound-event mapping still client code; combat tuning constants live in
-  melee.h, not data files, until the balance settles.
-- The server binary still does not simulate combat (melee module is
-  shared and ready; wiring lands with server-side simulation).
-- Everything from update 3's list that isn't combat: unchanged.
+- No player health yet: bot hits are feedback (flash/shake/sound), not
+  death. Wire player HP + death/respawn when the mode needs it.
+- Bots do not move, feint, jab, kick, parry, or counter. Training partner
+  only; movement/AI is its own milestone.
+- Drag/accel affects contact TIMING only (the swept ray). No turn-cap or
+  windup rotation limits yet; add if real PvP shows ballerina spins.
+- Combat tuning constants live in melee.h, not data files, until balance
+  settles. Sound-event mapping still client code.
+- Server binary still does not simulate combat (module is shared + pure
+  and ready; lands with server-side simulation).
 
 BROKEN / WATCH OUT
 ------------------
-- Sharp edge: WorldEntity/EntityDef grew `gear`; the Interactables ray
-  mask now includes gear pickups. Any future pickup kind needs one of
-  weaponId/carryable/gear or E will not see it.
-- bots_ maps stable entity id -> brain; brains are erased when the bot
-  dies so the respawn starts fresh. If you erase entities another way,
-  stale brains are harmless (entityById returns null and they are skipped)
-  but bots_.clear() on session start is what actually prevents growth.
-- The impact pause scales the shared sim clock (accumulator included). If
-  a future system must NOT slow during hit-stop, read frameDt, not dt.
+- Two orphaned tacmove.exe instances (user playtest leftovers) held the
+  exe lock this session and had to be killed before linking. If a build
+  fails with LNK1104 on tacmove.exe, check Task Manager first.
+- The sweep means point-blank walls/props on your swing side eat the hit
+  early (by design - clang). If a future arena is very cramped, melee near
+  walls will feel restrictive; that is Chivalry-authentic but tunable via
+  the arc width.
+- resolveStrike outcome list grew (Interrupted, Deflected): any new caller
+  must handle them or the switch will not compile (deliberate - no default
+  case, so the compiler enforces completeness).
 
 BUILD / RUN
 -----------

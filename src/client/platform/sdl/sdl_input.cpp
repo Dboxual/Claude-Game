@@ -10,6 +10,7 @@ const InputState& SdlInput::pump() {
     state_.interactPressed = false;
     state_.attackPressed = false;
     state_.kickPressed = false;
+    state_.jabPressed = false;
     state_.throwPressed = false;
     state_.feintPressed = false;
     state_.altAttackPressed = false;
@@ -58,6 +59,7 @@ const InputState& SdlInput::pump() {
             else if (e.key.key == SDLK_B) state_.spawnMenuPressed = true;
             else if (e.key.key == SDLK_Q) state_.throwPressed = true;
             else if (e.key.key == SDLK_F) state_.kickPressed = true;
+            else if (e.key.key == SDLK_V) state_.jabPressed = true;
             else if (e.key.key == SDLK_R) state_.feintPressed = true;
             else if (e.key.key == SDLK_LALT) state_.altAttackPressed = true;
             else if (e.key.key == SDLK_E) state_.interactPressed = true;

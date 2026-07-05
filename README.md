@@ -107,6 +107,7 @@ see [PORTING.md](PORTING.md)).
 | Left Alt or mouse side button | Alternate-side slash |
 | R or middle mouse | Feint: cancel your windup (costs stamina) |
 | F | Kick — smashes raised guards open (short range, cooldown) |
+| V | Jab — short pommel bash that interrupts enemy windups |
 | Q | Throw the held melee weapon (arcs, lands as a pickup) |
 | E | Pick up the item you are looking at; carry/drop light props |
 | B | Toggle the dev spawn menu (in game) |
@@ -174,8 +175,12 @@ respawns. Switch with **1/2/3/4**. Fists, karambit, and the fantasy sword
 are melee and run through the duel system below (heavier weapons wind up
 and recover slower — `weight` in the weapon def); the Glock is a semi-auto
 hitscan pistol (unlimited ammo for now). The **training dummy** has 100 HP,
-flashes red on hits, shows its health when you aim at it, and respawns 5
-seconds after being destroyed.
+flashes red and flinches on hits, and shows its health when you aim at it.
+
+**Nothing respawns by default**: taken pickups, destroyed dummies/bots, and
+props are gone for good unless a def file or a per-entity world-save line
+sets `respawn_seconds > 0`. Thrown/dropped weapons stay in the world as
+pickups until you take them back.
 
 ## Melee combat (duel prototype)
 
@@ -190,27 +195,40 @@ inputs and turns outcomes into sound, sparks, and screen shake.
   but not while your guard is up. Below 30 your defense weakens (blocks
   cost 1.5x). If a block drains you to zero your **guard breaks**: a long
   stagger, a distinctive sound, and you are wide open.
-- **Attack phases**: windup → active hit window → recovery. Attacking
-  during the tail of recovery chains a **combo** (faster windup, rising
-  stamina cost, max 3 deep). Every attack sweeps until it connects once.
+- **Attack phases**: windup → release (the blade *travels*) → recovery.
+  Attacking during the tail of recovery chains a **combo** (faster windup,
+  rising stamina cost, max 3 deep). Commitment is real: whiffing into air
+  recovers 20% slower (kicks 50%), and swinging into a wall or a crate
+  clangs off it into a bounce recovery.
+- **The blade sweeps through space**: during the release, slashes arc
+  across the view (a left slash crosses left→right), overheads sweep top to
+  bottom, stabs thrust straight. The sweep is camera-relative — turning
+  *into* your swing makes it connect earlier (**accel**), turning away
+  **drags** it later. Contact happens where the blade actually is.
 - **Attacks**: left/right slashes (LMB, sides alternate; Alt forces the
   other side), overhead (wheel up), stab (wheel down). Holding LMB through
   the windup commits a **heavy**: longer windup, 1.6x damage, much more
   expensive — and brutal against blocks.
-- **Block & parry** (RMB): holding block eats hits for stamina. Raising the
-  guard *just before* impact (150 ms window) is a **parry**: sparks, ring,
-  the attacker staggers, and your next attack within 0.8 s is a **riposte**
-  (fast windup, +25% damage).
-- **Perfect counter**: if you answer an incoming attack by winding up the
-  *same* attack type as the strike lands, the blades meet — the attacker is
-  thrown off hard and your own strike accelerates into a riposte. Read the
-  bot's blade position (and the windup cue sound) to match it.
+- **Block & parry** (RMB): holding block eats hits for stamina (and holding
+  the guard up slowly drains it). Raising the guard *just before* impact
+  (160 ms window) is a **parry**: sparks, ring, the attacker staggers, and
+  a big **RIPOSTE!** prompt appears — your next attack within 0.9 s is a
+  riposte: fast windup, +25% damage, and **protected** (incoming strikes
+  are deflected while it winds up).
+- **Perfect counter**: answer an incoming attack by winding up the *same*
+  attack type as the strike lands — the blades meet, the attacker is thrown
+  off hard, and your own strike accelerates into a riposte. The bot's blade
+  position, the windup cue sound, and the aim readout ("WINDING UP STAB")
+  teach the language.
+- **Jab** (V): a short pommel bash. Tiny damage, but it **interrupts
+  windups** — the tool for stopping pressure and resetting tempo. Weak into
+  guards, cooldown, bad when spammed.
 - **Feint** (R or middle mouse): cancels your windup for stamina, flowing
   into a different attack. Stamina is the anti-spam: there are no free
   cancels.
 - **Kick** (F): short range, cooldown, won't clash with blades — it exists
   to smash raised guards open (stagger + stamina drain). The answer to a
-  turtling shield.
+  turtling shield; a whiffed kick leaves you hanging.
 - **Shield** (pickup, spawn menu → Pickups): rides along with any melee
   weapon. Blocks cost 40% less, but you walk slower while it is raised,
   raising it pauses stamina regen, and a kick opens it like any guard.
@@ -219,17 +237,20 @@ inputs and turns outcomes into sound, sparks, and screen shake.
   pickup you can grab back with E. Fists stay home.
 
 **Sparring partner:** spawn the **Duelist Bot** (spawn menu → Bots). It
-performs slow, telegraphed basic attacks — the blade visibly winds to the
-side the cut comes from and a cue sound marks the windup start — and
-sometimes holds its guard up after attacking. It has health and stamina of
-its own: parry it, riposte it, perfect-counter it, kick its guard open, or
+performs slow, telegraphed basic attacks — the bronze armor never blends
+into the arena, the blade visibly winds to the side the cut comes from
+(amber while charging, red in the hit window), a cue sound marks the windup
+start, and aiming at it names the incoming attack. It sometimes holds its
+guard up after attacking. It has health and stamina of its own: parry it,
+riposte it, perfect-counter it, jab its windups, kick its guard open, or
 grind its stamina down until its guard breaks. It never parries and never
 counters (it is a training partner, not an AI milestone).
 
 Feedback: sparks on every clash, hit-stop on clean hits, screen shake on
-heavy impacts, a red flash when you get hit, and distinct original sounds
-for swing / body hit / block / parry / shield block / kick / guard break /
-throw (see `server/content/sounds/CREDITS.md`).
+heavy impacts, targets flinch on hits and reel while staggered, a red flash
+when you get hit, and distinct original sounds for swing / deep body hit /
+block / parry / shield block / kick / guard break / throw (see
+`server/content/sounds/CREDITS.md`).
 
 **First-person viewmodels.** The held weapon is drawn as a real 3D model in
 the player's hands — lit, oriented geometry in camera space with its own

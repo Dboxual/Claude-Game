@@ -36,6 +36,18 @@ constexpr float kAimInfoRange = 12.0f; // max distance for the target readout
 // Viewmodel animation.
 constexpr float kEquipDuration = 0.25f; // weapon-raise time after switching
 
+const char* attackName(melee::Attack a) {
+    switch (a) {
+    case melee::Attack::SlashLeft: return "SLASH LEFT";
+    case melee::Attack::SlashRight: return "SLASH RIGHT";
+    case melee::Attack::Overhead: return "OVERHEAD";
+    case melee::Attack::Stab: return "STAB";
+    case melee::Attack::Kick: return "KICK";
+    case melee::Attack::Jab: return "JAB";
+    }
+    return "?";
+}
+
 // Composes translate * yaw * pitch * roll (degrees) for viewmodel groups
 // and boxes. Camera space: +X right, +Y up, -Z forward.
 glm::mat4 vmCompose(const glm::mat4& parent, glm::vec3 pos, glm::vec3 rotDeg) {
@@ -531,7 +543,7 @@ void Game::updateMelee(const InputState& in, float dt) {
 
     // Swing whoosh the instant the windup releases into the hit window.
     if (prevMeleePhase_ == melee::Phase::Windup && A.phase == melee::Phase::Active &&
-        A.attack != Attack::Kick) {
+        A.attack != Attack::Kick && A.attack != Attack::Jab) {
         sfx("swing");
     }
 
@@ -560,6 +572,9 @@ void Game::updateMelee(const InputState& in, float dt) {
         if (in.kickPressed && melee::startAttack(A, Attack::Kick, false)) {
             heavyEligible_ = false;
         }
+        if (in.jabPressed && melee::startAttack(A, Attack::Jab, false)) {
+            heavyEligible_ = false;
+        }
 
         // Hold left click through the windup to commit the slash to a heavy.
         if (heavyEligible_ && A.phase == melee::Phase::Windup && !A.heavy) {
@@ -586,42 +601,81 @@ void Game::updateMelee(const InputState& in, float dt) {
 }
 
 void Game::performMeleeStrike(const WeaponDef& weapon) {
+    using melee::Attack;
     melee::Actor& A = playerMelee_;
-    bool kick = A.attack == melee::Attack::Kick;
-    float range = kick ? melee::kKickRange : weapon.range;
+    bool kick = A.attack == Attack::Kick;
+    bool jab = A.attack == Attack::Jab;
+    bool blunt = kick || jab;
+    float range = kick ? melee::kKickRange : jab ? melee::kJabRange : weapon.range;
+
+    // The blade travels through space during the release: slashes sweep an
+    // arc across the view (a left slash crosses left -> right, a right
+    // slash right -> left), overheads sweep top to bottom, stabs and jabs
+    // thrust straight. The sweep is camera-relative, so turning INTO the
+    // swing lands contact earlier (accel) and turning away drags it later -
+    // simple, readable Chivalry-style timing control.
+    const glm::vec3 look = lookDirection();
+    const glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+    const glm::vec3 camRight = glm::normalize(glm::cross(look, worldUp));
+    float p = melee::phaseProgress(A);
+    float yawOff = 0.0f, pitchOff = 0.0f; // degrees off the crosshair
+    switch (A.attack) {
+    case Attack::SlashLeft: yawOff = glm::mix(32.0f, -32.0f, p); break; // +yaw = left
+    case Attack::SlashRight: yawOff = glm::mix(-32.0f, 32.0f, p); break;
+    case Attack::Overhead: pitchOff = glm::mix(28.0f, -22.0f, p); break;
+    default: break; // Stab / Jab / Kick: straight thrust
+    }
+    glm::mat4 sweep = glm::rotate(glm::mat4(1.0f), glm::radians(yawOff), worldUp);
+    sweep = glm::rotate(sweep, glm::radians(pitchOff), camRight);
+    glm::vec3 dir = glm::normalize(glm::vec3(sweep * glm::vec4(look, 0.0f)));
 
     const glm::vec3 eye = eyePosition();
-    const glm::vec3 dir = lookDirection();
     float geoT = world_.raycastGeometry(eye, dir, range);
     World::EntityHit hit =
         world_.raycastEntities(eye, dir, geoT, World::RayMask::AttackTargets);
-    if (hit.index < 0) return;
+
+    // Nothing along the blade's current line: keep sweeping until the
+    // window closes (a full whiff recovers slower - see melee::tick).
+    if (hit.index < 0 && geoT >= range) return;
+
+    glm::vec3 hitPos = eye + dir * (hit.index >= 0 ? hit.t : geoT);
+
+    // The blade met a wall or an undamageable prop: clang off it and eat
+    // the bounce recovery. Swinging into the level is a real mistake.
+    if (hit.index < 0 || world_.entities()[size_t(hit.index)].maxHealth <= 0.0f) {
+        if (!blunt) {
+            sfx("block");
+            addSparks(hitPos, 3, {0.85f, 0.85f, 0.90f});
+            triggerShake(0.15f, 0.1f);
+        }
+        melee::bounceOff(A);
+        return;
+    }
 
     const WorldEntity& target = world_.entities()[size_t(hit.index)];
-    glm::vec3 hitPos = eye + dir * hit.t;
     std::string targetId = target.defId;
     unsigned targetEid = target.id;
     auto brainIt = bots_.find(targetEid);
 
     auto applyDamage = [&]() {
         hitMarkerTimer_ = 0.12f;
-        sfx(kick ? "kick_hit" : "melee_hit");
-        hitStop_ = std::max(hitStop_, A.heavy ? 0.09f : 0.045f);
+        sfx(blunt ? "kick_hit" : "melee_hit");
+        hitStop_ = std::max(hitStop_, jab ? 0.03f : A.heavy ? 0.09f : 0.05f);
         if (A.heavy) triggerShake(0.5f, 0.25f);
         bool destroyed = world_.damageEntity(hit.index, melee::damageOf(A, weapon.damage));
         aimInteract_ = {};
         aimInfo_ = {}; // indices may have shifted; refreshed next frame
         if (destroyed) {
-            bots_.erase(targetEid); // a respawned duelist gets a fresh brain
+            bots_.erase(targetEid); // if it ever comes back, fresh brain
             const EntityDef* def = content_.find(targetId);
             showToast(toUpperAscii(def ? def->displayName : targetId) + " DESTROYED");
         }
     };
 
     if (brainIt == bots_.end()) {
-        // Passive target (training dummy, props): plain damage, no exchange.
+        // Passive target (training dummy): plain damage, no exchange.
         A.strikeDone = true;
-        if (target.maxHealth > 0.0f) applyDamage();
+        applyDamage();
         return;
     }
 
@@ -633,11 +687,20 @@ void Game::performMeleeStrike(const WeaponDef& weapon) {
     case Outcome::Hit:
         applyDamage();
         break;
+    case Outcome::Interrupted:
+        applyDamage();
+        showToast("INTERRUPTED ITS ATTACK");
+        break;
     case Outcome::Blocked:
     case Outcome::ShieldBlocked:
         sfx("block");
         addSparks(hitPos, 5, {1.0f, 0.75f, 0.35f});
         triggerShake(0.2f, 0.12f);
+        break;
+    case Outcome::Deflected: // it was mid-riposte: protected
+        sfx("block");
+        addSparks(hitPos, 6, {0.9f, 0.9f, 0.95f});
+        showToast("DEFLECTED - RIPOSTES ARE PROTECTED");
         break;
     case Outcome::GuardBroken:
         sfx("guard_break");
@@ -697,9 +760,11 @@ void Game::updateBots(float dt) {
             }
         }
 
-        // Its strike lands once if the player is still in reach; otherwise
-        // the window just closes into a whiffed recovery.
-        if (B.phase == melee::Phase::Active && !B.strikeDone && dist <= 2.6f) {
+        // Its strike lands once, a beat into the hit window (the blade has
+        // visibly turned red by then), if the player is still in reach;
+        // otherwise the window closes into a whiffed recovery.
+        if (B.phase == melee::Phase::Active && !B.strikeDone &&
+            melee::phaseProgress(B) >= 0.35f && dist <= 2.6f) {
             applyBotStrikeOnPlayer(B);
         }
 
@@ -722,6 +787,17 @@ void Game::applyBotStrikeOnPlayer(melee::Actor& bot) {
         triggerShake(0.7f, 0.3f);
         sfx("melee_hit");
         showToast("HIT - HOLD RIGHT CLICK TO BLOCK");
+        break;
+    case Outcome::Interrupted: // caught mid-windup: your swing is gone too
+        damageFlash_ = 0.45f;
+        triggerShake(0.75f, 0.3f);
+        sfx("melee_hit");
+        showToast("INTERRUPTED - DON'T SWING INTO ITS ATTACK");
+        break;
+    case Outcome::Deflected: // your riposte windup shrugged it off
+        sfx("block");
+        addSparks(clash, 8, {0.9f, 0.9f, 0.95f});
+        showToast("RIPOSTE DEFLECTED IT - KEEP SWINGING");
         break;
     case Outcome::Blocked:
         sfx("block");
@@ -1402,11 +1478,34 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         }
         float flash = glm::clamp(e.hitFlash / 0.15f, 0.0f, 1.0f);
 
+        // Impact reaction: damageable entities visibly flinch away from the
+        // player on a hit, and a staggered duelist reels back for the whole
+        // stagger - the target reacts like something was driven into it.
+        glm::vec3 lean(0.0f);
+        if (e.maxHealth > 0.0f) {
+            glm::vec3 away = e.pos - player_.pos;
+            away.y = 0.0f;
+            float len = glm::length(away);
+            if (len > 0.01f) {
+                away /= len;
+                lean = away * (0.16f * flash);
+                auto botIt = bots_.find(e.id);
+                if (botIt != bots_.end() &&
+                    botIt->second.actor.phase == melee::Phase::Stagger) {
+                    const melee::Actor& B = botIt->second.actor;
+                    float reel = B.phaseTotal > 0.0f ? B.phaseLeft / B.phaseTotal : 0.0f;
+                    lean += away * (0.22f * reel);
+                }
+            }
+        }
+
         const EntityDef* def = content_.find(e.defId);
         if (def && !def->visual.empty()) {
+            float entityH = std::max(0.2f, e.size.y);
             for (const VisualPart& part : def->visual) {
                 BoxDraw draw;
-                draw.center = base + part.offset;
+                // Taller parts lean further: the whole stack tips, not slides.
+                draw.center = base + part.offset + lean * (part.offset.y / entityH);
                 draw.size = part.size;
                 draw.color = glm::mix(part.color, glm::vec3(1.0f, 0.15f, 0.1f), flash);
                 frame.boxes.push_back(draw);
@@ -1414,7 +1513,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         } else {
             AABB b = e.bounds();
             BoxDraw draw;
-            draw.center = (b.min + b.max) * 0.5f + (base - e.pos);
+            draw.center = (b.min + b.max) * 0.5f + (base - e.pos) + lean * 0.5f;
             draw.size = b.max - b.min;
             draw.color = glm::mix(e.color, glm::vec3(1.0f, 0.15f, 0.1f), flash);
             frame.boxes.push_back(draw);
@@ -1606,7 +1705,7 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         addLine(glm::vec4(0.7f, 0.75f, 0.8f, 1.0f),
                 "B SPAWN  E USE  LMB SLASH (HOLD=HEAVY)  RMB BLOCK  WHEEL OVH/STAB");
         addLine(glm::vec4(0.7f, 0.75f, 0.8f, 1.0f),
-                "ALT ALT-SLASH  F KICK  R FEINT  Q THROW  1-4 WEAPONS  F5 CFG  F1 HUD");
+                "ALT ALT-SLASH  V JAB  F KICK  R FEINT  Q THROW  1-4 WEAPONS  F1 HUD");
 
         // Big speedometer under the crosshair; green when above run speed
         // (i.e. you gained speed through air-strafing).
@@ -1642,6 +1741,13 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         t.text = std::move(text);
         frame.texts.push_back(std::move(t));
     };
+
+    // Riposte window: an unmissable prompt - this is the read->react->punish
+    // loop's "punish now" beat.
+    if (playerMelee_.riposteWindow > 0.0f) {
+        centeredLine(viewportH * 0.5f - 48.0f, 2.5f,
+                     glm::vec4(1.0f, 0.9f, 0.35f, 0.95f), "RIPOSTE!");
+    }
 
     // Hit marker: four small squares around the crosshair while a hit
     // confirmation is live.
@@ -1685,10 +1791,17 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         auto botIt = bots_.find(e.id);
         if (botIt != bots_.end()) {
             const melee::Actor& B = botIt->second.actor;
-            const char* state = B.phase == melee::Phase::Stagger ? "  STAGGERED"
-                                : melee::guardUp(B)              ? "  GUARDING"
-                                : B.phase == melee::Phase::Windup ? "  WINDING UP"
-                                                                  : "";
+            char state[48] = "";
+            if (B.phase == melee::Phase::Stagger) {
+                std::snprintf(state, sizeof(state), "  STAGGERED");
+            } else if (melee::guardUp(B)) {
+                std::snprintf(state, sizeof(state), "  GUARDING");
+            } else if (B.phase == melee::Phase::Windup) {
+                // Naming the incoming attack teaches the counter language:
+                // answer it with the same attack to perfect-counter.
+                std::snprintf(state, sizeof(state), "  WINDING UP %s",
+                              attackName(B.attack));
+            }
             std::snprintf(info, sizeof(info), "%s  %d/%d  STA %d%s",
                           toUpperAscii(def ? def->displayName : e.defId).c_str(),
                           int(std::ceil(e.health)), int(e.maxHealth),
@@ -1797,6 +1910,9 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
             case melee::Attack::Stab:
                 return windup ? Key{{0.05f, -0.03f, 0.17f}, {7, 5, 3}}
                               : Key{{-0.05f, 0.02f, -0.36f}, {-5, -6, -2}};
+            case melee::Attack::Jab: // short pommel bash: a sharp forward pop
+                return windup ? Key{{0.03f, -0.01f, 0.09f}, {3, -8, -12}}
+                              : Key{{-0.04f, 0.02f, -0.22f}, {-4, 6, 16}};
             case melee::Attack::Kick: // hands just dip while the boot flies
             default:
                 return windup ? Key{{0.04f, -0.09f, 0.05f}, {-9, 6, 8}}

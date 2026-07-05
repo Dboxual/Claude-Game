@@ -27,10 +27,10 @@ Rules of the format:
 - The client loads this folder at startup; a definition with the same id as
   a C++ builtin replaces it. If the folder is missing the builtins keep the
   game runnable (see `ContentRegistry::registerBuiltins`).
-- `respawn_seconds` is the respawn rule: 0 = never comes back (the default,
-  and the norm for props), >0 = returns that many seconds after being taken
-  (pickups) or destroyed (bots). Placed entities can override it in the
-  world save file.
+- `respawn_seconds` is the respawn rule: 0 = never comes back, and 0 is the
+  default for EVERYTHING (pickups, bots, props alike - taken or destroyed
+  means gone). Set it >0 in a def file, or per placed entity in a world
+  save, to opt into respawning.
 - `carryable = 1` marks light props the player can E-carry; heavy or static
   objects leave it 0. This is deliberately a boolean, not a weight system.
 - `gear = 1` marks equipment pickups (the shield): E equips them instead of

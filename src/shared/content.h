@@ -61,8 +61,8 @@ struct EntityDef {
 
     // Respawn rule, stated once here and honored everywhere: after this many
     // seconds a taken pickup / destroyed bot comes back at its spawn point.
-    // 0 = never (props like crates/barrels default to 0 - destroyed or
-    // consumed means gone). World saves can override per placed entity.
+    // EVERYTHING defaults to 0 = never (taken/destroyed means gone) - a def
+    // file or a per-placed-entity world save override opts INTO respawning.
     float respawnSeconds = 0.0f;
 
     std::vector<VisualPart> visual; // multi-box visual; empty = one size/color box

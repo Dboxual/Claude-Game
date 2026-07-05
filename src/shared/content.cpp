@@ -69,7 +69,7 @@ void ContentRegistry::registerBuiltins() {
         d.size = {0.45f, 0.30f, 0.45f}; // generous interact box, easy to target
         d.color = blade;
         d.weaponId = "karambit";
-        d.respawnSeconds = 10.0f;
+        d.respawnSeconds = 0.0f; // taken = gone, unless a def/world overrides
         d.visual = {
             {{-0.13f, 0.10f, 0.0f}, {0.12f, 0.05f, 0.035f}, handleDark}, // handle
             {{-0.21f, 0.10f, 0.0f}, {0.05f, 0.07f, 0.025f}, blade},      // finger ring
@@ -89,7 +89,7 @@ void ContentRegistry::registerBuiltins() {
         d.size = {0.45f, 0.30f, 0.45f};
         d.color = gunMetal;
         d.weaponId = "glock";
-        d.respawnSeconds = 10.0f;
+        d.respawnSeconds = 0.0f; // taken = gone, unless a def/world overrides
         d.visual = {
             {{0.0f, 0.175f, 0.0f}, {0.30f, 0.07f, 0.05f}, gunMetal},   // slide
             {{-0.16f, 0.175f, 0.0f}, {0.04f, 0.05f, 0.04f}, gunMetal}, // muzzle
@@ -108,7 +108,7 @@ void ContentRegistry::registerBuiltins() {
         d.size = {0.60f, 0.30f, 0.45f};
         d.color = blade;
         d.weaponId = "sword";
-        d.respawnSeconds = 10.0f;
+        d.respawnSeconds = 0.0f; // taken = gone, unless a def/world overrides
         d.visual = {
             {{0.09f, 0.105f, 0.0f}, {0.40f, 0.045f, 0.018f}, blade},     // blade
             {{0.315f, 0.105f, 0.0f}, {0.07f, 0.03f, 0.015f}, blade},     // tip taper
@@ -129,7 +129,7 @@ void ContentRegistry::registerBuiltins() {
         d.color = {0.82f, 0.72f, 0.45f};
         d.solid = true;
         d.maxHealth = 100.0f;
-        d.respawnSeconds = 5.0f; // respawns after being destroyed
+        d.respawnSeconds = 0.0f; // destroyed = gone, unless a def/world overrides
         d.visual = {
             {{0.0f, 0.06f, 0.0f}, {0.60f, 0.12f, 0.60f}, {0.35f, 0.35f, 0.38f}}, // base
             {{0.0f, 0.42f, 0.0f}, {0.14f, 0.60f, 0.14f}, {0.45f, 0.40f, 0.30f}}, // post
@@ -148,16 +148,18 @@ void ContentRegistry::registerBuiltins() {
         d.displayName = "Duelist Bot";
         d.category = ContentCategory::Bot;
         d.size = {0.70f, 1.90f, 0.70f};
-        d.color = {0.45f, 0.48f, 0.56f};
+        d.color = {0.62f, 0.42f, 0.20f};
         d.solid = true;
         d.maxHealth = 150.0f;
-        d.respawnSeconds = 6.0f;
+        d.respawnSeconds = 0.0f; // destroyed = gone, unless a def/world overrides
+        // Bronze armor on purpose: the arena walls are slate blue, and the
+        // duelist must never camouflage - reading it IS the gameplay.
         d.visual = {
             {{0.0f, 0.06f, 0.0f}, {0.66f, 0.12f, 0.66f}, {0.30f, 0.30f, 0.34f}},  // base
             {{0.0f, 0.45f, 0.0f}, {0.16f, 0.66f, 0.16f}, {0.36f, 0.38f, 0.44f}},  // legs post
-            {{0.0f, 1.10f, 0.0f}, {0.54f, 0.64f, 0.32f}, {0.45f, 0.48f, 0.56f}},  // cuirass
-            {{0.0f, 1.47f, 0.0f}, {0.62f, 0.10f, 0.36f}, {0.36f, 0.38f, 0.44f}},  // shoulders
-            {{0.0f, 1.66f, 0.0f}, {0.28f, 0.28f, 0.26f}, {0.62f, 0.64f, 0.70f}},  // helm
+            {{0.0f, 1.10f, 0.0f}, {0.54f, 0.64f, 0.32f}, {0.62f, 0.42f, 0.20f}},  // cuirass
+            {{0.0f, 1.47f, 0.0f}, {0.62f, 0.10f, 0.36f}, {0.42f, 0.30f, 0.18f}},  // shoulders
+            {{0.0f, 1.66f, 0.0f}, {0.28f, 0.28f, 0.26f}, {0.85f, 0.82f, 0.74f}},  // helm
         };
         defs_.push_back(d);
     }
@@ -172,7 +174,7 @@ void ContentRegistry::registerBuiltins() {
         d.size = {0.55f, 0.35f, 0.55f};
         d.color = {0.46f, 0.30f, 0.16f};
         d.gear = true;
-        d.respawnSeconds = 10.0f;
+        d.respawnSeconds = 0.0f; // taken = gone, unless a def/world overrides
         d.visual = {
             {{0.0f, 0.10f, 0.0f}, {0.50f, 0.06f, 0.50f}, {0.46f, 0.30f, 0.16f}},   // face
             {{0.0f, 0.135f, 0.0f}, {0.16f, 0.055f, 0.16f}, {0.62f, 0.64f, 0.70f}}, // boss

@@ -7,12 +7,13 @@ namespace melee {
 namespace {
 
 const Spec kSpecs[] = {
-    // windup active recovery dmgMul stamina
-    {0.28f, 0.14f, 0.34f, 1.00f, 6.0f}, // SlashLeft
-    {0.28f, 0.14f, 0.34f, 1.00f, 6.0f}, // SlashRight
-    {0.34f, 0.12f, 0.38f, 1.15f, 7.0f}, // Overhead
-    {0.24f, 0.12f, 0.30f, 0.85f, 5.0f}, // Stab
-    {0.18f, 0.10f, 0.35f, 0.00f, kKickCost}, // Kick (flat kKickDamage)
+    // windup active recovery dmgMul stamina blockCost
+    {0.35f, 0.18f, 0.42f, 1.00f, 7.0f, 12.0f},      // SlashLeft
+    {0.35f, 0.18f, 0.42f, 1.00f, 7.0f, 12.0f},      // SlashRight
+    {0.42f, 0.16f, 0.48f, 1.20f, 8.0f, 16.0f},      // Overhead
+    {0.30f, 0.12f, 0.38f, 0.85f, 6.0f, 10.0f},      // Stab
+    {0.20f, 0.10f, 0.40f, 0.00f, kKickCost, 0.0f},  // Kick (flat kKickDamage)
+    {0.13f, 0.08f, 0.34f, 0.00f, kJabCost, 4.0f},   // Jab (flat kJabDamage)
 };
 
 void enterPhase(Actor& a, Phase p, float duration) {
@@ -31,10 +32,7 @@ void drain(Actor& a, float cost) {
     a.regenDelay = kRegenDelay;
 }
 
-// Hit clean while winding up: the attack is knocked out of your hands.
-void interruptIfWindup(Actor& a) {
-    if (a.phase == Phase::Windup) stagger(a, kInterruptFlinch);
-}
+bool weightless(Attack t) { return t == Attack::Kick || t == Attack::Jab; }
 
 } // namespace
 
@@ -43,12 +41,17 @@ const Spec& spec(Attack a) { return kSpecs[int(a)]; }
 void tick(Actor& a, float dt) {
     a.regenDelay -= dt;
     a.kickCooldown = std::max(0.0f, a.kickCooldown - dt);
+    a.jabCooldown = std::max(0.0f, a.jabCooldown - dt);
     a.riposteWindow = std::max(0.0f, a.riposteWindow - dt);
     if (a.blockHeld) a.blockTime += dt;
 
-    // Regen pauses while spending, while the guard is up (raising a shield
-    // or blade costs effort), and while staggered.
-    if (a.regenDelay <= 0.0f && !a.blockHeld && a.phase != Phase::Stagger) {
+    // Holding the guard up costs effort (more with a shield) and pauses
+    // regen - turtling is a losing stamina game. It never breaks the guard
+    // by itself; only an incoming hit on an empty tank does that.
+    if (guardUp(a)) {
+        float mul = a.hasShield ? kGuardHoldDrainShieldMul : 1.0f;
+        a.stamina = std::max(0.0f, a.stamina - kGuardHoldDrain * mul * dt);
+    } else if (a.regenDelay <= 0.0f && !a.blockHeld && a.phase != Phase::Stagger) {
         a.stamina = std::min(kMaxStamina, a.stamina + kRegenPerSecond * dt);
     }
 
@@ -65,8 +68,12 @@ void tick(Actor& a, float dt) {
     }
     case Phase::Active: {
         const Spec& s = spec(a.attack);
-        float w = a.attack == Attack::Kick ? 1.0f : a.weight;
+        float w = weightless(a.attack) ? 1.0f : a.weight;
         float recover = s.recovery * w + (a.heavy ? kHeavyExtraRecover : 0.0f);
+        // Commitment: swinging at air is the most punishable mistake.
+        if (!a.strikeDone) {
+            recover *= a.attack == Attack::Kick ? kKickWhiffRecoverMul : kWhiffRecoverMul;
+        }
         enterPhase(a, Phase::Recovery, recover);
         break;
     }
@@ -99,11 +106,12 @@ bool canStartAttack(const Actor& a) {
 bool startAttack(Actor& a, Attack type, bool heavy) {
     if (!canStartAttack(a)) return false;
     if (type == Attack::Kick && a.kickCooldown > 0.0f) return false;
+    if (type == Attack::Jab && a.jabCooldown > 0.0f) return false;
 
     const Spec& s = spec(type);
     bool combo = a.phase == Phase::Recovery;
-    bool riposte = a.riposteWindow > 0.0f && type != Attack::Kick;
-    float w = type == Attack::Kick ? 1.0f : a.weight;
+    bool riposte = a.riposteWindow > 0.0f && !weightless(type);
+    float w = weightless(type) ? 1.0f : a.weight;
 
     float cost = s.stamina * w * (heavy ? kHeavyStaminaMul : 1.0f);
     if (combo) cost += kComboStaminaStep * float(a.comboDepth + 1); // chains tire you
@@ -116,6 +124,7 @@ bool startAttack(Actor& a, Attack type, bool heavy) {
     a.strikeDone = false;
     a.comboDepth = combo ? a.comboDepth + 1 : 0;
     if (type == Attack::Kick) a.kickCooldown = kKickCooldown;
+    if (type == Attack::Jab) a.jabCooldown = kJabCooldown;
 
     float windup = s.windup * w + (heavy ? kHeavyExtraWindup : 0.0f);
     if (combo) windup *= kComboWindupMul;
@@ -128,7 +137,7 @@ bool startAttack(Actor& a, Attack type, bool heavy) {
 }
 
 bool upgradeToHeavy(Actor& a) {
-    if (a.phase != Phase::Windup || a.heavy || a.attack == Attack::Kick) return false;
+    if (a.phase != Phase::Windup || a.heavy || weightless(a.attack)) return false;
     const Spec& s = spec(a.attack);
     float extraCost = s.stamina * a.weight * (kHeavyStaminaMul - 1.0f);
     if (a.stamina < extraCost) return false; // stays light
@@ -157,8 +166,14 @@ bool spendStamina(Actor& a, float cost) {
     return true;
 }
 
+void bounceOff(Actor& a) {
+    a.strikeDone = true;
+    enterPhase(a, Phase::Recovery, kBlockBounceRecover);
+}
+
 float damageOf(const Actor& a, float weaponBaseDamage) {
     if (a.attack == Attack::Kick) return kKickDamage;
+    if (a.attack == Attack::Jab) return kJabDamage;
     float dmg = weaponBaseDamage * spec(a.attack).damageMul;
     if (a.heavy) dmg *= kHeavyDamageMul;
     if (a.riposte) dmg *= kRiposteDamageMul;
@@ -175,7 +190,24 @@ Outcome resolveStrike(Actor& attacker, Actor& defender) {
             stagger(defender, kKickGuardStagger);
             return Outcome::GuardOpened;
         }
-        interruptIfWindup(defender);
+        if (defender.phase == Phase::Windup && !defender.riposte) {
+            stagger(defender, kInterruptFlinch);
+            return Outcome::Interrupted;
+        }
+        return Outcome::Hit;
+    }
+
+    // Jab: a fast pommel bash. Its whole purpose is stopping a windup;
+    // into a guard it just thuds, and on an idle body it barely scratches.
+    if (attacker.attack == Attack::Jab) {
+        if (defender.phase == Phase::Windup && !defender.riposte) {
+            stagger(defender, kJabInterruptStagger);
+            return Outcome::Interrupted;
+        }
+        if (guardUp(defender)) {
+            drain(defender, spec(Attack::Jab).blockCost);
+            return defender.hasShield ? Outcome::ShieldBlocked : Outcome::Blocked;
+        }
         return Outcome::Hit;
     }
 
@@ -191,6 +223,15 @@ Outcome resolveStrike(Actor& attacker, Actor& defender) {
         return Outcome::PerfectCountered;
     }
 
+    // Ripostes are protected: a riposte in its windup shrugs strikes off
+    // and keeps coming. This is what makes winning the parry exchange
+    // actually feel winning.
+    if (defender.phase == Phase::Windup && defender.riposte) {
+        drain(attacker, kAttackerBlockCost);
+        enterPhase(attacker, Phase::Recovery, kBlockBounceRecover);
+        return Outcome::Deflected;
+    }
+
     if (guardUp(defender)) {
         // Timed parry: the guard came up just before the hit.
         if (defender.blockTime <= kParryWindow) {
@@ -200,9 +241,10 @@ Outcome resolveStrike(Actor& attacker, Actor& defender) {
             return Outcome::Parried;
         }
 
-        // Held (late) block: safe but expensive - and low stamina makes it
+        // Held (late) block: safe but expensive - low stamina makes it
         // worse, until the guard finally shatters.
-        float cost = attacker.heavy ? kHeavyBlockStaminaCost : kBlockStaminaCost;
+        float cost = spec(attacker.attack).blockCost;
+        if (attacker.heavy) cost *= kHeavyBlockMul;
         if (defender.hasShield) cost *= kShieldBlockCostMul;
         if (defender.stamina < kLowStamina) cost *= kLowStaminaBlockMul;
 
@@ -218,7 +260,10 @@ Outcome resolveStrike(Actor& attacker, Actor& defender) {
         return defender.hasShield ? Outcome::ShieldBlocked : Outcome::Blocked;
     }
 
-    interruptIfWindup(defender);
+    if (defender.phase == Phase::Windup) {
+        stagger(defender, kInterruptFlinch);
+        return Outcome::Interrupted;
+    }
     return Outcome::Hit;
 }
 
