@@ -12,6 +12,11 @@ void GameSettings::applyFrom(const ConfigFile& cfg) {
     fullscreen = cfg.get("fullscreen", fullscreen ? 1.0f : 0.0f) != 0.0f;
     vsync = cfg.get("vsync", vsync ? 1.0f : 0.0f) != 0.0f;
     showDebugHud = cfg.get("show_debug_hud", showDebugHud ? 1.0f : 0.0f) != 0.0f;
+    thirdPerson = cfg.get("third_person", thirdPerson ? 1.0f : 0.0f) != 0.0f;
+    std::string policy = cfg.getString("camera_policy", "allow_toggle");
+    if (policy == "first_person_only") cameraPolicy = CameraPolicy::FirstPersonOnly;
+    else if (policy == "third_person_only") cameraPolicy = CameraPolicy::ThirdPersonOnly;
+    else cameraPolicy = CameraPolicy::AllowToggle;
     clampRanges();
 }
 
@@ -37,8 +42,15 @@ std::string GameSettings::serialize() const {
                   "sfx_volume        = %.2f\n"
                   "fullscreen        = %d\n"
                   "vsync             = %d\n"
-                  "show_debug_hud    = %d\n",
+                  "show_debug_hud    = %d\n"
+                  "third_person      = %d\n"
+                  "# camera_policy: allow_toggle | first_person_only | third_person_only\n"
+                  "camera_policy     = %s\n",
                   mouseSensitivity, fovDegrees, masterVolume, musicVolume, sfxVolume,
-                  fullscreen ? 1 : 0, vsync ? 1 : 0, showDebugHud ? 1 : 0);
+                  fullscreen ? 1 : 0, vsync ? 1 : 0, showDebugHud ? 1 : 0,
+                  thirdPerson ? 1 : 0,
+                  cameraPolicy == CameraPolicy::FirstPersonOnly   ? "first_person_only"
+                  : cameraPolicy == CameraPolicy::ThirdPersonOnly ? "third_person_only"
+                                                                  : "allow_toggle");
     return buf;
 }

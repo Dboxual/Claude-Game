@@ -7,6 +7,8 @@ const InputState& SdlInput::pump() {
     state_.reloadConfigPressed = false;
     state_.toggleHudPressed = false;
     state_.spawnMenuPressed = false;
+    state_.inventoryPressed = false;
+    state_.cameraTogglePressed = false;
     state_.interactPressed = false;
     state_.attackPressed = false;
     state_.kickPressed = false;
@@ -57,6 +59,8 @@ const InputState& SdlInput::pump() {
             else if (e.key.key == SDLK_F5) state_.reloadConfigPressed = true;
             else if (e.key.key == SDLK_F1) state_.toggleHudPressed = true;
             else if (e.key.key == SDLK_B) state_.spawnMenuPressed = true;
+            else if (e.key.key == SDLK_TAB || e.key.key == SDLK_I) state_.inventoryPressed = true;
+            else if (e.key.key == SDLK_T) state_.cameraTogglePressed = true;
             else if (e.key.key == SDLK_Q) state_.throwPressed = true;
             else if (e.key.key == SDLK_F) state_.kickPressed = true;
             else if (e.key.key == SDLK_V) state_.jabPressed = true;

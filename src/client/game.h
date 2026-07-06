@@ -7,7 +7,9 @@
 #include "client/settings.h"
 #include "shared/config.h"
 #include "shared/content.h"
+#include "shared/crafting.h"
 #include "shared/inventory.h"
+#include "shared/items.h"
 #include "shared/melee.h"
 #include "shared/player.h"
 #include "shared/world.h"
@@ -63,7 +65,7 @@ public:
 private:
     enum class UiScreen {
         None, MainMenu, Singleplayer, Multiplayer, Settings, PauseMain,
-        CreateWorld, LoadWorld, SpawnMenu,
+        CreateWorld, LoadWorld, SpawnMenu, Inventory,
     };
 
     struct UiButton {
@@ -80,6 +82,8 @@ private:
             Resume, QuitToMenu,
             // dev spawn menu
             SelectSpawnCategory, SpawnEntity, CloseSpawnMenu,
+            // inventory / crafting screen
+            InvEquipItem, CraftRecipe, CloseInventory,
             // settings screen
             Back, ResetDefaults,
             SensDown, SensUp, FovDown, FovUp,
@@ -116,6 +120,17 @@ private:
     glm::vec3 lookDirection() const;
     void updateAimTarget();
     void tryInteract();
+
+    // RPG systems. The weapon actually in the player's hands is the item
+    // inventory's main-hand item when one is equipped, else the legacy
+    // sandbox weapon slot - heldWeaponId() is the single truth every combat
+    // and viewmodel path reads.
+    std::string heldWeaponId() const;
+    void tryGather(int entityIndex);       // E on a resource node
+    void collectGroundItem(int entityIndex); // E on a dropped item
+    void updateMobs(float dt);             // hostile chase + contact strikes
+    void spawnLootDrop(const std::string& deadDefId, glm::vec3 pos);
+    bool thirdPersonActive() const;        // player preference under the policy
     void tryAttack(); // hitscan weapons only; melee runs through updateMelee
     void updateCarriedProp();
     void dropCarriedProp();
@@ -156,6 +171,8 @@ private:
     World world_;
     Player player_;
     ContentRegistry content_;
+    ItemRegistry items_;
+    RecipeRegistry recipes_;
     glm::vec3 prevPos_{0.0f}; // position before the latest tick, for interpolation
 
     // Sandbox world session. currentWorldFile_ empty = test arena (not saved).
@@ -166,7 +183,14 @@ private:
     std::string worldNameInput_;            // CreateWorld text field
 
     // Combat / interaction state (reset by beginSession).
-    Inventory inventory_;
+    Inventory inventory_;   // legacy sandbox weapon slots (1-9)
+    ItemInventory itemInv_; // RPG item stacks + main-hand equipment
+
+    // Hostile mob timers, keyed by stable entity id (same pattern as bots_).
+    struct MobBrain {
+        float attackCooldown = 0.0f;
+    };
+    std::unordered_map<unsigned, MobBrain> mobs_;
     float attackCooldown_ = 0.0f;   // hitscan fire interval (melee paces itself)
     float muzzleFlashTimer_ = 0.0f; // pistol-fire viewmodel flash/recoil
     float hitMarkerTimer_ = 0.0f;   // crosshair hit confirmation

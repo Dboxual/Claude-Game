@@ -51,6 +51,7 @@ bool parseEntityDef(const std::string& text, EntityDef& out) {
     if (cat == "weapon") d.category = ContentCategory::Weapon;
     else if (cat == "bot") d.category = ContentCategory::Bot;
     else if (cat == "pickup") d.category = ContentCategory::Pickup;
+    else if (cat == "node") d.category = ContentCategory::Node;
     else d.category = ContentCategory::Prop;
 
     d.size = getVec3(cfg, "size", d.size);
@@ -62,6 +63,18 @@ bool parseEntityDef(const std::string& text, EntityDef& out) {
     d.weaponId = cfg.getString("weapon", "");
     d.maxHealth = cfg.get("max_health", d.maxHealth);
     d.respawnSeconds = cfg.get("respawn_seconds", d.respawnSeconds);
+
+    // RPG fields (see content.h for semantics).
+    d.harvestItemId = cfg.getString("harvest_item", "");
+    d.harvestCount = int(cfg.get("harvest_count", float(d.harvestCount)));
+    d.harvestHits = int(cfg.get("harvest_hits", float(d.harvestHits)));
+    d.toolClass = cfg.getString("tool_class", "");
+    d.itemId = cfg.getString("item", "");
+    d.itemCount = int(cfg.get("item_count", float(d.itemCount)));
+    d.lootItemId = cfg.getString("loot_item", "");
+    d.lootCount = int(cfg.get("loot_count", float(d.lootCount)));
+    d.hostile = getBool(cfg, "hostile", d.hostile);
+    d.contactDamage = cfg.get("contact_damage", d.contactDamage);
 
     // Visual boxes: part1..part16 = "ox oy oz sx sy sz r g b". ConfigFile is
     // a flat map, so parts are numbered keys rather than repeated ones.

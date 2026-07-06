@@ -33,6 +33,13 @@ constexpr float kSpawnDistance = 2.5f;   // meters in front of the player
 constexpr float kInteractRange = 2.5f; // max distance for E-pickup
 constexpr float kAimInfoRange = 12.0f; // max distance for the target readout
 
+// RPG foundation (M4).
+constexpr float kMobAggroRange = 9.0f;  // hostile mobs notice the player
+constexpr float kMobStrikeRange = 1.7f; // ...and swing inside this
+constexpr float kMobSpeed = 2.3f;       // m/s chase speed (player runs 6)
+constexpr float kMobStrikeCooldown = 1.2f;
+constexpr float kThirdPersonDist = 3.4f; // camera boom length behind the eye
+
 // Viewmodel animation.
 constexpr float kEquipDuration = 0.25f; // weapon-raise time after switching
 
@@ -89,6 +96,8 @@ bool Game::init(IFileSystem& fs, IAudio* audio) {
     fs_ = &fs;
     audio_ = audio;
     content_.registerBuiltins();
+    items_.registerBuiltins();
+    recipes_.registerBuiltins();
 
     const std::string relative = "config/movement.cfg";
     if (fs.exists(relative)) cfgPath_ = relative;
@@ -186,6 +195,8 @@ void Game::beginSession() {
     accumulator_ = 0.0;
     jumpBufferTimer_ = -1.0;
     inventory_.reset("fists");
+    itemInv_.reset();
+    mobs_.clear();
     attackCooldown_ = 0.0f;
     muzzleFlashTimer_ = hitMarkerTimer_ = 0.0f;
     footstepDistance_ = 0.0f;
@@ -219,33 +230,54 @@ void Game::beginSession() {
 void Game::startTestWorld() {
     world_.buildTestMap();
 
-    // Furnish the arena: it should demo every system - weapons to grab,
-    // things to fight, props to move - without ever opening the spawn
-    // menu. Test-arena pickups/bots respawn (this world is a persistent
-    // playground and is never saved); created worlds keep the
-    // nothing-respawns default.
-    auto place = [&](const char* id, glm::vec3 pos, float respawnSeconds) {
+    // Furnish the glade: the whole RPG loop should be walkable without the
+    // spawn menu - gather wood/stone at spawn, craft tools, mine the east
+    // shelf, fight the goblin camp up north. respawn -1 keeps each def's
+    // default (nodes renew, drops don't); this world is never saved.
+    auto place = [&](const char* id, glm::vec3 pos, float respawnSeconds = -1.0f) {
         if (const EntityDef* def = content_.find(id)) {
             world_.addEntity(*def, pos, respawnSeconds);
         }
     };
-    // Weapon rack: one pickup on each crate of the jump-reference row.
-    place("sword", {4.75f, 0.5f, -1.25f}, 15.0f);
-    place("glock", {7.75f, 1.0f, -1.25f}, 15.0f);
-    place("karambit", {10.75f, 1.5f, -1.25f}, 15.0f);
-    place("shield", {3.0f, 0.0f, -3.5f}, 15.0f);
-    // Training corner by the strafe pillars.
-    place("training_dummy", {-5.5f, 0.0f, -6.5f}, 10.0f);
-    place("duel_bot", {-8.5f, 0.0f, -5.5f}, 10.0f);
-    // Movable props near spawn (carry with E; a ready-made stack to break).
-    place("crate", {-2.5f, 0.0f, 3.0f}, 0.0f);
-    place("crate", {-2.5f, 1.0f, 3.0f}, 0.0f);
-    place("crate", {-3.8f, 0.0f, 3.4f}, 0.0f);
-    place("barrel", {2.6f, 0.0f, 4.2f}, 0.0f);
-    place("barrel", {3.5f, 0.0f, 4.8f}, 0.0f);
 
-    currentWorldFile_.clear(); // the test arena is never saved
-    currentWorldName_ = "TEST ARENA";
+    // Tree line around the glade edges.
+    place("tree", {-16.0f, 0.0f, -4.0f});
+    place("tree", {-14.0f, 0.0f, 6.0f});
+    place("tree", {-11.0f, 0.0f, 12.5f});
+    place("tree", {6.0f, 0.0f, -16.0f});
+    place("tree", {10.0f, 0.0f, 15.0f});
+    place("tree", {14.0f, 0.0f, 9.5f});
+    place("tree", {16.5f, 0.0f, 2.0f});
+    place("tree", {17.5f, 0.0f, 16.5f});
+
+    // Mining corner: rocks at the foot of the stone shelf, ore on top of it
+    // (one jump up) plus one vein at ground level for the first pickaxe.
+    place("rock", {11.0f, 0.0f, -11.0f});
+    place("rock", {12.0f, 0.0f, -5.0f});
+    place("rock", {17.5f, 0.0f, -5.5f});
+    place("ore_node", {14.5f, 0.0f, -6.5f});
+    place("ore_node", {16.0f, 1.0f, -10.5f});
+    place("ore_node", {18.3f, 1.0f, -11.5f});
+
+    // Goblin camp on the north mound: two goblins guarding their stash.
+    place("goblin", {-5.5f, 0.35f, -14.5f}, 25.0f);
+    place("goblin", {-7.5f, 0.35f, -13.0f}, 25.0f);
+    place("crate", {-3.6f, 0.35f, -16.0f}, 0.0f);
+    place("barrel", {-7.0f, 0.35f, -16.2f}, 0.0f);
+
+    // Village green: a practice dummy and some props to carry around.
+    place("training_dummy", {-4.2f, 0.02f, 3.2f}, 10.0f);
+    place("crate", {-5.9f, 0.02f, 4.8f}, 0.0f);
+    place("crate", {-2.6f, 0.02f, 5.4f}, 0.0f);
+    place("barrel", {2.4f, 0.0f, 4.6f}, 0.0f);
+
+    // Loose starter resources by the spawn so E-pickup teaches itself.
+    place("drop_wood", {1.2f, 0.0f, 6.5f}, 0.0f);
+    place("drop_wood", {-0.8f, 0.0f, 5.6f}, 0.0f);
+    place("drop_stone", {0.6f, 0.0f, 4.4f}, 0.0f);
+
+    currentWorldFile_.clear(); // the test glade is never saved
+    currentWorldName_ = "TEST GLADE";
     beginSession();
 }
 
@@ -496,6 +528,138 @@ glm::vec3 Game::lookDirection() const {
                      -std::cos(yaw_) * std::cos(pitch_));
 }
 
+// --- RPG systems: items in hand, gathering, ground drops, mobs, camera ----
+
+std::string Game::heldWeaponId() const {
+    if (!itemInv_.equippedItemId.empty()) {
+        if (const ItemDef* item = items_.find(itemInv_.equippedItemId)) {
+            if (!item->weaponId.empty()) return item->weaponId;
+        }
+    }
+    return inventory_.equippedId();
+}
+
+bool Game::thirdPersonActive() const {
+    switch (settings_.cameraPolicy) {
+    case CameraPolicy::FirstPersonOnly: return false;
+    case CameraPolicy::ThirdPersonOnly: return true;
+    case CameraPolicy::AllowToggle: break;
+    }
+    return settings_.thirdPerson;
+}
+
+// E on a resource node: one gather per press. The right tool doubles the
+// yield; bare hands always work so a fresh spawn is never locked out of the
+// loop. Depletion goes through consumePickup so the def's respawn rule is
+// honored exactly like weapon pickups.
+void Game::tryGather(int entityIndex) {
+    const WorldEntity& src = world_.entities()[size_t(entityIndex)];
+    WorldEntity* node = world_.entityById(src.id);
+    if (!node || !node->active || node->harvestItemId.empty()) return;
+
+    const ItemDef* item = items_.find(node->harvestItemId);
+    bool rightTool = false;
+    if (!node->toolClass.empty() && !itemInv_.equippedItemId.empty()) {
+        if (const ItemDef* tool = items_.find(itemInv_.equippedItemId)) {
+            rightTool = tool->toolClass == node->toolClass;
+        }
+    }
+    int yield = node->harvestCount * (rightTool ? 2 : 1);
+    int added = itemInv_.add(node->harvestItemId, yield, item ? item->maxStack : 99);
+    if (added <= 0) {
+        showToast("INVENTORY FULL");
+        return;
+    }
+
+    node->hitFlash = 0.12f; // same red blink the damage path uses
+    node->hitsLeft -= 1;
+    glm::vec3 at = node->pos + glm::vec3(0.0f, node->size.y * 0.6f, 0.0f);
+    addSparks(at, 4, item ? item->color : glm::vec3(0.8f));
+    sfx("dummy_hit", rightTool ? 1.1f : 0.85f);
+
+    std::string name = toUpperAscii(item ? item->displayName : node->harvestItemId);
+    if (node->hitsLeft <= 0) {
+        showToast("+" + std::to_string(added) + " " + name + " - DEPLETED");
+        world_.consumePickup(entityIndex);
+        aimInteract_ = {};
+        aimInfo_ = {}; // indices may have shifted; refreshed next frame
+    } else {
+        showToast("+" + std::to_string(added) + " " + name);
+    }
+}
+
+// E on a dropped item: straight into the item inventory.
+void Game::collectGroundItem(int entityIndex) {
+    const WorldEntity& e = world_.entities()[size_t(entityIndex)];
+    const ItemDef* item = items_.find(e.itemId);
+    int added = itemInv_.add(e.itemId, e.itemCount, item ? item->maxStack : 99);
+    if (added <= 0) {
+        showToast("INVENTORY FULL");
+        return;
+    }
+    std::string name = toUpperAscii(item ? item->displayName : e.itemId);
+    world_.consumePickup(entityIndex);
+    aimInteract_ = {};
+    aimInfo_ = {};
+    sfx("pickup");
+    showToast("+" + std::to_string(added) + " " + name);
+}
+
+// Destroyed entities with a loot table leave their items on the ground as
+// "drop_<item>" entities (content.cpp keeps that naming convention).
+void Game::spawnLootDrop(const std::string& deadDefId, glm::vec3 pos) {
+    const EntityDef* dead = content_.find(deadDefId);
+    if (!dead || dead->lootItemId.empty()) return;
+    const EntityDef* drop = content_.find("drop_" + dead->lootItemId);
+    if (!drop) return;
+    for (int i = 0; i < dead->lootCount; ++i) {
+        if (world_.entities().size() >= kMaxEntities) break;
+        glm::vec3 at = pos + glm::vec3((rand01() - 0.5f) * 0.7f, 0.05f,
+                                       (rand01() - 0.5f) * 0.7f);
+        world_.addEntity(*drop, at, 0.0f); // loot never respawns
+    }
+    saveCurrentWorld();
+}
+
+// Deliberately tiny mob brain: hostiles amble toward a nearby player and
+// strike on contact. No pathing, no obstacle avoidance, no wander - mobs
+// walk straight lines and stop at strike range. Movement mutates entity
+// positions through stable ids so respawns/erases can never dangle.
+void Game::updateMobs(float dt) {
+    std::vector<unsigned> ids;
+    for (const WorldEntity& e : world_.entities()) {
+        if (e.hostile && e.active) ids.push_back(e.id);
+    }
+    for (unsigned id : ids) {
+        WorldEntity* e = world_.entityById(id);
+        if (!e) continue;
+        MobBrain& brain = mobs_[id];
+        brain.attackCooldown = std::max(0.0f, brain.attackCooldown - dt);
+
+        glm::vec3 toPlayer = player_.pos - e->pos;
+        toPlayer.y = 0.0f;
+        float dist = glm::length(toPlayer);
+        if (dist > kMobAggroRange || dist < 0.01f) continue;
+
+        if (dist > kMobStrikeRange) {
+            glm::vec3 next = e->pos + (toPlayer / dist) * (kMobSpeed * dt);
+            next.x = glm::clamp(next.x, -19.0f, 19.0f);
+            next.z = glm::clamp(next.z, -19.0f, 19.0f);
+            // Settle onto whatever is underfoot (the camp mound, the shelf).
+            glm::vec3 from = next + glm::vec3(0.0f, 0.6f, 0.0f);
+            float down = world_.raycastGeometry(from, glm::vec3(0.0f, -1.0f, 0.0f), 3.0f);
+            if (down < 3.0f) next.y = from.y - down + 0.005f;
+            e->pos = next;
+        } else if (brain.attackCooldown <= 0.0f) {
+            brain.attackCooldown = kMobStrikeCooldown;
+            damageFlash_ = 0.35f;
+            triggerShake(0.4f, 0.2f);
+            sfx("kick_hit");
+            damagePlayer(e->contactDamage);
+        }
+    }
+}
+
 void Game::updateAimTarget() {
     const glm::vec3 eye = eyePosition();
     const glm::vec3 dir = lookDirection();
@@ -545,6 +709,16 @@ void Game::tryInteract() {
         return;
     }
 
+    if (!e.itemId.empty()) { // ground item drop -> item inventory
+        collectGroundItem(aimInteract_.index);
+        return;
+    }
+
+    if (!e.harvestItemId.empty()) { // resource node: gather one hit
+        tryGather(aimInteract_.index);
+        return;
+    }
+
     if (e.carryable) { // light prop: start carrying by stable id
         WorldEntity* prop = world_.entityById(e.id);
         if (!prop) return;
@@ -557,16 +731,18 @@ void Game::tryInteract() {
     }
 }
 
-// Hitscan weapons only (the Glock). Melee attacks run through the shared
-// combat module via updateMelee/performMeleeStrike.
+// Hitscan weapons only (the Glock and the staff's magic bolt). Melee attacks
+// run through the shared combat module via updateMelee/performMeleeStrike.
 void Game::tryAttack() {
-    const WeaponDef* weapon = content_.findWeapon(inventory_.equippedId());
+    const WeaponDef* weapon = content_.findWeapon(heldWeaponId());
     if (!weapon || weapon->kind != WeaponKind::Hitscan) return;
     if (attackCooldown_ > 0.0f) return;
 
     attackCooldown_ = weapon->cooldownSeconds;
     muzzleFlashTimer_ = 0.07f;
-    sfx("gunshot", 0.96f + rand01() * 0.08f);
+    // The staff whooshes instead of banging; same audio set, different read.
+    if (weapon->id == "basic_staff") sfx("swing", 0.55f + rand01() * 0.06f);
+    else sfx("gunshot", 0.96f + rand01() * 0.08f);
 
     const glm::vec3 eye = eyePosition();
     const glm::vec3 dir = lookDirection();
@@ -598,6 +774,7 @@ void Game::tryAttack() {
 
     std::string targetId = target.defId;
     unsigned targetEid = target.id;
+    glm::vec3 targetPos = target.pos;
     hitMarkerTimer_ = 0.12f;
     sfx("dummy_hit");
     bool destroyed = world_.damageEntity(hit.index, weapon->damage);
@@ -605,6 +782,8 @@ void Game::tryAttack() {
     aimInfo_ = {}; // entity vector may have shifted; refreshed next frame
     if (destroyed) {
         bots_.erase(targetEid); // a respawned duelist starts with a fresh brain
+        mobs_.erase(targetEid);
+        spawnLootDrop(targetId, targetPos);
         const EntityDef* def = content_.find(targetId);
         showToast(toUpperAscii(def ? def->displayName : targetId) + " DESTROYED");
     }
@@ -622,7 +801,7 @@ void Game::showToast(std::string text) {
 void Game::updateMelee(const InputState& in, float dt) {
     using melee::Attack;
     melee::Actor& A = playerMelee_;
-    const WeaponDef* weapon = content_.findWeapon(inventory_.equippedId());
+    const WeaponDef* weapon = content_.findWeapon(heldWeaponId());
     bool isMelee = weapon && weapon->kind == WeaponKind::Melee;
 
     A.hasShield = hasShield_;
@@ -744,6 +923,7 @@ void Game::performMeleeStrike(const WeaponDef& weapon) {
     const WorldEntity& target = world_.entities()[size_t(hit.index)];
     std::string targetId = target.defId;
     unsigned targetEid = target.id;
+    glm::vec3 targetPos = target.pos;
     auto brainIt = bots_.find(targetEid);
 
     auto applyDamage = [&]() {
@@ -756,6 +936,8 @@ void Game::performMeleeStrike(const WeaponDef& weapon) {
         aimInfo_ = {}; // indices may have shifted; refreshed next frame
         if (destroyed) {
             bots_.erase(targetEid); // if it ever comes back, fresh brain
+            mobs_.erase(targetEid);
+            spawnLootDrop(targetId, targetPos);
             const EntityDef* def = content_.find(targetId);
             showToast(toUpperAscii(def ? def->displayName : targetId) + " DESTROYED");
         }
@@ -927,6 +1109,12 @@ void Game::applyBotStrikeOnPlayer(melee::Actor& bot) {
 
 void Game::tryThrowWeapon() {
     melee::Actor& A = playerMelee_;
+    if (!itemInv_.equippedItemId.empty()) {
+        // Crafted tools/weapons live in the item inventory; throwing would
+        // desync the two systems. Unequip via the inventory screen instead.
+        showToast("CRAFTED GEAR CANNOT BE THROWN");
+        return;
+    }
     const WeaponDef* w = content_.findWeapon(inventory_.equippedId());
     if (!w || w->kind != WeaponKind::Melee || w->id == "fists") {
         showToast("NOTHING THROWABLE IN HAND");
@@ -979,6 +1167,7 @@ void Game::updateThrownWeapons(float dt) {
                     addSparks(hitPos, 5, {1.0f, 0.75f, 0.35f});
                 } else if (e.maxHealth > 0.0f) {
                     const WeaponDef* w = content_.findWeapon(t.weaponId);
+                    glm::vec3 targetPos = e.pos;
                     hitMarkerTimer_ = 0.12f;
                     sfx("melee_hit");
                     bool destroyed =
@@ -987,6 +1176,8 @@ void Game::updateThrownWeapons(float dt) {
                     aimInfo_ = {};
                     if (destroyed) {
                         bots_.erase(targetEid);
+                        mobs_.erase(targetEid);
+                        spawnLootDrop(targetId, targetPos);
                         const EntityDef* def = content_.find(targetId);
                         showToast(toUpperAscii(def ? def->displayName : targetId) +
                                   " DESTROYED");
@@ -1128,6 +1319,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
             ui_ = UiScreen::Singleplayer;
             break;
         case UiScreen::SpawnMenu: // close, back to gameplay
+        case UiScreen::Inventory:
             menuStatus_.clear();
             ui_ = UiScreen::None;
             break;
@@ -1145,6 +1337,28 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
         } else if (ui_ == UiScreen::SpawnMenu) {
             menuStatus_.clear();
             ui_ = UiScreen::None;
+        }
+    }
+
+    // Tab/I toggles the inventory/crafting screen in a gameplay context.
+    if (in.inventoryPressed && inGame_) {
+        if (ui_ == UiScreen::None) {
+            menuStatus_.clear();
+            ui_ = UiScreen::Inventory;
+        } else if (ui_ == UiScreen::Inventory) {
+            menuStatus_.clear();
+            ui_ = UiScreen::None;
+        }
+    }
+
+    // T flips the camera, unless the world's camera policy pins it.
+    if (in.cameraTogglePressed && inGame_ && ui_ == UiScreen::None) {
+        if (settings_.cameraPolicy == CameraPolicy::AllowToggle) {
+            settings_.thirdPerson = !settings_.thirdPerson;
+            saveSettings();
+            showToast(settings_.thirdPerson ? "THIRD PERSON" : "FIRST PERSON");
+        } else {
+            showToast("CAMERA IS LOCKED BY THIS WORLD'S SETTINGS");
         }
     }
 
@@ -1340,12 +1554,15 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
 
     updateMelee(in, dt);      // stamina, attack phases, blocks, feints, throws
     updateBots(dt);           // duelist bot brains: telegraphs, strikes, guards
+    updateMobs(dt);           // hostile mobs: chase + contact strikes
     updateThrownWeapons(dt);  // thrown weapon arcs -> impacts -> pickups
     updateSparks(dt);
 
     updateCarriedProp(); // held prop follows the camera
     updateAimTarget();
-    if (in.slotPressed > 0) inventory_.selectSlot(in.slotPressed - 1);
+    if (in.slotPressed > 0 && inventory_.selectSlot(in.slotPressed - 1)) {
+        itemInv_.equippedItemId.clear(); // slot keys return to sandbox weapons
+    }
     if (in.interactPressed) tryInteract();
     if (in.attackPressed) tryAttack(); // hitscan only; melee ran in updateMelee
 }
@@ -1412,6 +1629,36 @@ void Game::activateButton(UiButton::Id id, int payload) {
         break;
     case Id::SpawnEntity: spawnFromMenu(payload); break;
     case Id::CloseSpawnMenu: menuStatus_.clear(); ui_ = UiScreen::None; break;
+
+    // Inventory / crafting screen.
+    case Id::InvEquipItem: {
+        if (payload < 0 || payload >= int(itemInv_.stacks.size())) break;
+        const std::string itemId = itemInv_.stacks[size_t(payload)].itemId;
+        const ItemDef* item = items_.find(itemId);
+        if (!item || item->weaponId.empty()) break; // resources are not equippable
+        if (itemInv_.equippedItemId == itemId) {
+            itemInv_.equippedItemId.clear(); // click again to unequip
+            menuStatus_ = "UNEQUIPPED " + toUpperAscii(item->displayName);
+        } else {
+            itemInv_.equippedItemId = itemId;
+            menuStatus_ = "EQUIPPED " + toUpperAscii(item->displayName);
+        }
+        break;
+    }
+    case Id::CraftRecipe: {
+        const std::vector<Recipe>& rs = recipes_.recipes();
+        if (payload < 0 || payload >= int(rs.size())) break;
+        const Recipe& r = rs[size_t(payload)];
+        if (craft(itemInv_, r, items_)) {
+            const ItemDef* out = items_.find(r.outputItemId);
+            menuStatus_ = "CRAFTED " + toUpperAscii(out ? out->displayName : r.outputItemId);
+            sfx("pickup");
+        } else {
+            menuStatus_ = "MISSING MATERIALS OR INVENTORY FULL";
+        }
+        break;
+    }
+    case Id::CloseInventory: menuStatus_.clear(); ui_ = UiScreen::None; break;
 
     // Settings.
     case Id::ResetDefaults: settings_ = GameSettings{}; settingsChanged = true; break;
@@ -1495,9 +1742,9 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
 
     case UiScreen::SpawnMenu: {
         // GMod-style: a row of category tabs, entries of the open tab below.
-        static const char* kTabNames[] = {"WEAPONS", "BOTS", "PROPS", "PICKUPS"};
-        constexpr int kTabCount = 4;
-        const float tabW = 150.0f, tabH = 40.0f, tabGap = 10.0f;
+        static const char* kTabNames[] = {"WEAPONS", "BOTS", "PROPS", "PICKUPS", "NODES"};
+        constexpr int kTabCount = 5;
+        const float tabW = 138.0f, tabH = 40.0f, tabGap = 10.0f;
         float tabX = cx - (kTabCount * tabW + (kTabCount - 1) * tabGap) / 2;
         const float tabY = viewportH * 0.26f;
         for (int i = 0; i < kTabCount; ++i) {
@@ -1516,6 +1763,51 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         y += 18.0f;
         buttons.push_back({Id::CloseSpawnMenu, cx - kBtnW / 2, y, kBtnW, kBtnH,
                            "CLOSE", true});
+        break;
+    }
+
+    case UiScreen::Inventory: {
+        // Two columns: item stacks on the left (click a tool/weapon to
+        // equip/unequip it), recipes on the right (greyed until affordable).
+        const float rowW = 380.0f, rowH2 = 40.0f, rowGap = 8.0f;
+        const float leftX = cx - rowW - 30.0f;
+        const float rightX = cx + 30.0f;
+        const float y0 = viewportH * 0.26f;
+
+        float y = y0;
+        for (int i = 0; i < int(itemInv_.stacks.size()); ++i) {
+            const ItemStack& s = itemInv_.stacks[size_t(i)];
+            const ItemDef* item = items_.find(s.itemId);
+            std::string label = toUpperAscii(item ? item->displayName : s.itemId);
+            if (s.count > 1) label += "  X " + std::to_string(s.count);
+            bool equippable = item && !item->weaponId.empty();
+            bool equipped = equippable && itemInv_.equippedItemId == s.itemId;
+            if (equipped) label += "  [MAIN HAND]";
+            buttons.push_back({Id::InvEquipItem, leftX, y, rowW, rowH2,
+                               std::move(label), equippable, i, equipped});
+            y += rowH2 + rowGap;
+        }
+
+        y = y0;
+        for (int i = 0; i < int(recipes_.recipes().size()); ++i) {
+            const Recipe& r = recipes_.recipes()[size_t(i)];
+            const ItemDef* out = items_.find(r.outputItemId);
+            std::string label = toUpperAscii(out ? out->displayName : r.outputItemId);
+            label += "  (";
+            for (size_t k = 0; k < r.inputs.size(); ++k) {
+                const ItemDef* in = items_.find(r.inputs[k].itemId);
+                if (k > 0) label += " + ";
+                label += std::to_string(r.inputs[k].count) + " " +
+                         toUpperAscii(in ? in->displayName : r.inputs[k].itemId);
+            }
+            label += ")";
+            buttons.push_back({Id::CraftRecipe, rightX, y, rowW, rowH2,
+                               std::move(label), canCraft(itemInv_, r), i});
+            y += rowH2 + rowGap;
+        }
+
+        buttons.push_back({Id::CloseInventory, cx - kBtnW / 2, viewportH * 0.84f,
+                           kBtnW, kBtnH, "CLOSE", true});
         break;
     }
 
@@ -1582,10 +1874,12 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
     frame.viewportW = viewportW;
     frame.viewportH = viewportH;
 
+    glm::vec3 playerRenderPos = player_.pos; // interpolated below; body draw uses it
     if (inGame_) {
-        // First-person camera: interpolate between the last two ticks.
+        // Camera: interpolate between the last two ticks.
         float alpha = float(std::clamp(accumulator_ / tickDt_, 0.0, 1.0));
         glm::vec3 renderPos = glm::mix(prevPos_, player_.pos, alpha);
+        playerRenderPos = renderPos;
         glm::vec3 eye = renderPos + glm::vec3(0.0f, eyeHeight_, 0.0f);
         // Screen shake: decaying high-frequency wobble on the eye point.
         if (shakeTime_ > 0.0f) {
@@ -1597,7 +1891,19 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         }
         glm::vec3 lookDir(std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_),
                           -std::cos(yaw_) * std::cos(pitch_));
-        frame.view = glm::lookAt(eye, eye + lookDir, glm::vec3(0.0f, 1.0f, 0.0f));
+        if (thirdPersonActive()) {
+            // Boom camera: pull back along the look ray (slightly raised),
+            // snubbed against geometry so walls never occlude the player.
+            glm::vec3 boom = -lookDir * kThirdPersonDist + glm::vec3(0.0f, 0.35f, 0.0f);
+            float boomLen = glm::length(boom);
+            glm::vec3 boomDir = boom / boomLen;
+            float t = world_.raycastGeometry(eye, boomDir, boomLen);
+            glm::vec3 camPos = eye + boomDir * std::max(0.5f, t - 0.25f);
+            frame.view = glm::lookAt(camPos, eye + lookDir * 1.5f,
+                                     glm::vec3(0.0f, 1.0f, 0.0f));
+        } else {
+            frame.view = glm::lookAt(eye, eye + lookDir, glm::vec3(0.0f, 1.0f, 0.0f));
+        }
     } else {
         // Menu backdrop: a slow orbit over the arena.
         float t = float(menuTime_) * 0.08f;
@@ -1640,8 +1946,10 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         if (!e.active) continue; // picked up / destroyed, awaiting respawn
 
         glm::vec3 base = e.pos;
-        if (!e.weaponId.empty()) {
-            // Weapon pickups hover and bob slightly so they read as items.
+        bool isItemLike = !e.weaponId.empty() || !e.itemId.empty();
+        if (isItemLike) {
+            // Weapon pickups and item drops hover and bob so they read as
+            // things to grab instead of stray level geometry.
             base.y += 0.06f + 0.04f * float(std::sin(menuTime_ * 2.5 + double(ei) * 1.7));
         }
         float flash = glm::clamp(e.hitFlash / 0.15f, 0.0f, 1.0f);
@@ -1668,9 +1976,8 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         }
 
         const EntityDef* def = content_.find(e.defId);
-        if (def && !def->visual.empty() && !e.weaponId.empty()) {
-            // Weapon pickups hover (base bob above) AND slowly spin, so
-            // they read as items to grab instead of stray level geometry.
+        if (def && !def->visual.empty() && isItemLike) {
+            // Item-like entities hover (base bob above) AND slowly spin.
             float spinDeg = float(std::fmod(menuTime_ * 42.0 + double(e.id) * 47.0, 360.0));
             glm::mat4 group = vmCompose(glm::translate(glm::mat4(1.0f), base),
                                         glm::vec3(0.0f), {0.0f, spinDeg, 0.0f});
@@ -2423,6 +2730,39 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
                          "NOTHING IN THIS CATEGORY YET");
         }
         break;
+    case UiScreen::Inventory: {
+        centeredText(cx, viewportH * 0.10f, 4.0f, white, "INVENTORY");
+        centeredText(cx, viewportH * 0.10f + 42.0f, 2.0f, dimText,
+                     "TAB OR ESC CLOSES - CLICK A TOOL OR WEAPON TO EQUIP IT");
+
+        // Column headers over the two button columns (layout mirrors
+        // buildMenuLayout's Inventory case).
+        const float rowW = 380.0f;
+        centeredText(cx - rowW * 0.5f - 30.0f, viewportH * 0.26f - 34.0f, 2.0f,
+                     label, "ITEMS");
+        centeredText(cx + rowW * 0.5f + 30.0f, viewportH * 0.26f - 34.0f, 2.0f,
+                     label, "CRAFTING");
+
+        // Item color swatches beside each stack row.
+        float sy = viewportH * 0.26f;
+        for (const ItemStack& s : itemInv_.stacks) {
+            if (const ItemDef* item = items_.find(s.itemId)) {
+                frame.rects.push_back({cx - rowW - 30.0f - 26.0f, sy + 11.0f, 18.0f, 18.0f,
+                                       glm::vec4(item->color, 1.0f)});
+            }
+            sy += 48.0f;
+        }
+        if (itemInv_.stacks.empty()) {
+            centeredText(cx - rowW * 0.5f - 30.0f, viewportH * 0.40f, 2.0f, dimText,
+                         "EMPTY - GATHER WITH E");
+        }
+
+        const ItemDef* held = items_.find(itemInv_.equippedItemId);
+        centeredText(cx, viewportH * 0.79f, 2.0f, notice,
+                     "MAIN HAND: " + (held ? toUpperAscii(held->displayName)
+                                           : std::string("BARE HANDS")));
+        break;
+    }
     case UiScreen::Multiplayer:
         centeredText(cx, viewportH * 0.13f, 4.0f, white, "MULTIPLAYER");
         break;
@@ -2459,8 +2799,8 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
     // Status line for the sandbox screens (create/load feedback, spawn info).
     if (!menuStatus_.empty() &&
         (ui_ == UiScreen::CreateWorld || ui_ == UiScreen::LoadWorld ||
-         ui_ == UiScreen::SpawnMenu)) {
-        centeredText(cx, viewportH * 0.88f, 2.0f, notice, menuStatus_);
+         ui_ == UiScreen::SpawnMenu || ui_ == UiScreen::Inventory)) {
+        centeredText(cx, viewportH * 0.92f, 2.0f, notice, menuStatus_);
     }
 
     // Multiplayer: direct-connect address box plus one honest status line.

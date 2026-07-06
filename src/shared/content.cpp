@@ -50,6 +50,54 @@ void ContentRegistry::registerBuiltins() {
         weapons_.push_back(w);
     }
 
+    // --- RPG tools/weapons (held via the item inventory's main-hand slot).
+    // Tools swing fast but hit soft; the crafted sword is a real weapon but
+    // below the legacy sandbox sword; the staff is a slow magic bolt that
+    // reuses the hitscan path.
+    {
+        WeaponDef w;
+        w.id = "crude_axe";
+        w.displayName = "Crude Axe";
+        w.kind = WeaponKind::Melee;
+        w.damage = 20.0f;
+        w.range = 1.9f;
+        w.cooldownSeconds = 0.5f;
+        w.weight = 0.9f;
+        weapons_.push_back(w);
+    }
+    {
+        WeaponDef w;
+        w.id = "crude_pickaxe";
+        w.displayName = "Crude Pickaxe";
+        w.kind = WeaponKind::Melee;
+        w.damage = 15.0f;
+        w.range = 1.9f;
+        w.cooldownSeconds = 0.5f;
+        w.weight = 0.95f;
+        weapons_.push_back(w);
+    }
+    {
+        WeaponDef w;
+        w.id = "basic_sword";
+        w.displayName = "Basic Sword";
+        w.kind = WeaponKind::Melee;
+        w.damage = 35.0f;
+        w.range = 2.2f;
+        w.cooldownSeconds = 0.6f;
+        w.weight = 1.0f;
+        weapons_.push_back(w);
+    }
+    {
+        WeaponDef w;
+        w.id = "basic_staff";
+        w.displayName = "Basic Staff";
+        w.kind = WeaponKind::Hitscan; // magic bolt: hitscan with a slow cadence
+        w.damage = 18.0f;
+        w.range = 30.0f;
+        w.cooldownSeconds = 0.8f;
+        weapons_.push_back(w);
+    }
+
     // --- entity defs. 'fists' has no pickup: it is the base loadout.
 
     const glm::vec3 gunMetal{0.16f, 0.17f, 0.20f};
@@ -195,6 +243,165 @@ void ContentRegistry::registerBuiltins() {
         d.carryable = true;
         defs_.push_back(d);
     }
+    // --- RPG resource nodes. Solid, chunky, colorful; the collision box is
+    // the trunk/boulder only so canopies never block movement. Nodes respawn
+    // by default: the world is a renewable playground, and a world save can
+    // still override per placement.
+    {
+        EntityDef d;
+        d.id = "tree";
+        d.displayName = "Tree";
+        d.category = ContentCategory::Node;
+        d.size = {0.55f, 3.0f, 0.55f}; // trunk-only collision
+        d.color = {0.44f, 0.30f, 0.16f};
+        d.solid = true;
+        d.harvestItemId = "wood";
+        d.harvestCount = 1;
+        d.harvestHits = 4;
+        d.toolClass = "axe";
+        d.respawnSeconds = 30.0f;
+        const glm::vec3 bark{0.44f, 0.30f, 0.16f};
+        const glm::vec3 barkDark{0.36f, 0.24f, 0.13f};
+        const glm::vec3 leaf{0.28f, 0.58f, 0.26f};
+        const glm::vec3 leafLight{0.36f, 0.68f, 0.30f};
+        d.visual = {
+            {{0.0f, 1.1f, 0.0f}, {0.5f, 2.2f, 0.5f}, bark},        // trunk
+            {{0.12f, 0.35f, 0.10f}, {0.60f, 0.7f, 0.60f}, barkDark}, // root flare
+            {{0.0f, 2.75f, 0.0f}, {1.9f, 1.1f, 1.9f}, leaf},       // canopy base
+            {{0.15f, 3.55f, -0.10f}, {1.3f, 0.8f, 1.3f}, leafLight}, // canopy mid
+            {{-0.05f, 4.15f, 0.05f}, {0.7f, 0.5f, 0.7f}, leaf},    // canopy top
+        };
+        defs_.push_back(d);
+    }
+    {
+        EntityDef d;
+        d.id = "rock";
+        d.displayName = "Rock";
+        d.category = ContentCategory::Node;
+        d.size = {1.1f, 0.9f, 1.1f};
+        d.color = {0.55f, 0.57f, 0.60f};
+        d.solid = true;
+        d.harvestItemId = "stone";
+        d.harvestCount = 1;
+        d.harvestHits = 3;
+        d.toolClass = "pickaxe";
+        d.respawnSeconds = 30.0f;
+        const glm::vec3 grey{0.55f, 0.57f, 0.60f};
+        const glm::vec3 greyDark{0.44f, 0.46f, 0.50f};
+        d.visual = {
+            {{0.0f, 0.38f, 0.0f}, {1.05f, 0.76f, 0.95f}, grey},      // main boulder
+            {{0.42f, 0.20f, 0.30f}, {0.5f, 0.40f, 0.45f}, greyDark}, // side chunk
+            {{-0.35f, 0.62f, -0.15f}, {0.45f, 0.40f, 0.40f}, greyDark}, // top chunk
+        };
+        defs_.push_back(d);
+    }
+    {
+        EntityDef d;
+        d.id = "ore_node";
+        d.displayName = "Ore Vein";
+        d.category = ContentCategory::Node;
+        d.size = {1.0f, 0.9f, 1.0f};
+        d.color = {0.38f, 0.36f, 0.40f};
+        d.solid = true;
+        d.harvestItemId = "ore";
+        d.harvestCount = 1;
+        d.harvestHits = 3;
+        d.toolClass = "pickaxe";
+        d.respawnSeconds = 45.0f; // ore is the scarcer resource
+        const glm::vec3 dark{0.38f, 0.36f, 0.40f};
+        const glm::vec3 amber{0.90f, 0.60f, 0.22f};
+        d.visual = {
+            {{0.0f, 0.40f, 0.0f}, {0.95f, 0.80f, 0.90f}, dark},        // host rock
+            {{0.30f, 0.55f, 0.25f}, {0.28f, 0.26f, 0.24f}, amber},     // ore fleck
+            {{-0.28f, 0.30f, -0.20f}, {0.24f, 0.22f, 0.22f}, amber},   // ore fleck
+            {{0.05f, 0.72f, -0.22f}, {0.20f, 0.18f, 0.18f}, amber},    // ore fleck
+        };
+        defs_.push_back(d);
+    }
+
+    // --- RPG mob: the goblin is the first "real" enemy - short, green,
+    // readable at a glance next to the bronze duelist and tan dummy. Very
+    // simple AI (client-side chase + contact strike) on purpose.
+    {
+        EntityDef d;
+        d.id = "goblin";
+        d.displayName = "Goblin";
+        d.category = ContentCategory::Bot;
+        d.size = {0.60f, 1.25f, 0.60f};
+        d.color = {0.38f, 0.62f, 0.30f};
+        d.solid = true;
+        d.maxHealth = 40.0f;
+        d.hostile = true;
+        d.contactDamage = 7.0f;
+        d.lootItemId = "ore";
+        d.lootCount = 1;
+        d.respawnSeconds = 0.0f; // world placements opt into respawn
+        const glm::vec3 skin{0.38f, 0.62f, 0.30f};
+        const glm::vec3 skinDark{0.30f, 0.50f, 0.24f};
+        const glm::vec3 rags{0.45f, 0.32f, 0.22f};
+        d.visual = {
+            {{-0.14f, 0.14f, 0.0f}, {0.16f, 0.28f, 0.20f}, skinDark}, // left leg
+            {{0.14f, 0.14f, 0.0f}, {0.16f, 0.28f, 0.20f}, skinDark},  // right leg
+            {{0.0f, 0.52f, 0.0f}, {0.46f, 0.50f, 0.32f}, rags},       // tunic torso
+            {{-0.30f, 0.55f, 0.0f}, {0.13f, 0.38f, 0.15f}, skin},     // left arm
+            {{0.30f, 0.55f, 0.0f}, {0.13f, 0.38f, 0.15f}, skin},      // right arm
+            {{0.0f, 0.98f, 0.0f}, {0.34f, 0.32f, 0.30f}, skin},       // head
+            {{-0.26f, 1.04f, 0.0f}, {0.16f, 0.08f, 0.05f}, skinDark}, // left ear
+            {{0.26f, 1.04f, 0.0f}, {0.16f, 0.08f, 0.05f}, skinDark},  // right ear
+        };
+        defs_.push_back(d);
+    }
+
+    // --- ground item drops: what mobs leave behind and what loose resources
+    // look like lying in the world. E picks them up into the item inventory.
+    // Small hovering cubes tinted like their item; ids are "drop_" + item id
+    // (spawnLootDrop relies on that convention).
+    {
+        EntityDef d;
+        d.id = "drop_wood";
+        d.displayName = "Wood (drop)";
+        d.category = ContentCategory::Pickup;
+        d.size = {0.4f, 0.35f, 0.4f};
+        d.color = {0.58f, 0.40f, 0.22f};
+        d.itemId = "wood";
+        d.itemCount = 1;
+        d.visual = {
+            {{0.0f, 0.12f, 0.0f}, {0.30f, 0.14f, 0.14f}, {0.58f, 0.40f, 0.22f}}, // log
+            {{0.05f, 0.24f, 0.05f}, {0.24f, 0.12f, 0.12f}, {0.48f, 0.33f, 0.18f}},
+        };
+        defs_.push_back(d);
+    }
+    {
+        EntityDef d;
+        d.id = "drop_stone";
+        d.displayName = "Stone (drop)";
+        d.category = ContentCategory::Pickup;
+        d.size = {0.4f, 0.35f, 0.4f};
+        d.color = {0.58f, 0.60f, 0.63f};
+        d.itemId = "stone";
+        d.itemCount = 1;
+        d.visual = {
+            {{0.0f, 0.10f, 0.0f}, {0.24f, 0.18f, 0.22f}, {0.58f, 0.60f, 0.63f}},
+            {{0.10f, 0.20f, -0.04f}, {0.14f, 0.12f, 0.13f}, {0.48f, 0.50f, 0.54f}},
+        };
+        defs_.push_back(d);
+    }
+    {
+        EntityDef d;
+        d.id = "drop_ore";
+        d.displayName = "Ore (drop)";
+        d.category = ContentCategory::Pickup;
+        d.size = {0.4f, 0.35f, 0.4f};
+        d.color = {0.85f, 0.58f, 0.25f};
+        d.itemId = "ore";
+        d.itemCount = 1;
+        d.visual = {
+            {{0.0f, 0.10f, 0.0f}, {0.22f, 0.17f, 0.20f}, {0.40f, 0.38f, 0.42f}}, // rock
+            {{0.05f, 0.18f, 0.04f}, {0.13f, 0.12f, 0.12f}, {0.85f, 0.58f, 0.25f}}, // fleck
+        };
+        defs_.push_back(d);
+    }
+
     {
         // Heavy metal barrel: solid, NOT carryable, never respawns. Exists
         // partly to prove the carryable seam has both kinds of prop.

@@ -15,7 +15,7 @@
 // replace the builtin. Gameplay and world saves only ever reference defs by
 // their stable string id, so where a definition comes from never matters.
 
-enum class ContentCategory { Weapon, Bot, Prop, Pickup };
+enum class ContentCategory { Weapon, Bot, Prop, Pickup, Node };
 
 // --- weapons (held by the player) ---------------------------------------
 
@@ -58,6 +58,31 @@ struct EntityDef {
     float maxHealth = 0.0f; // >0 = damageable (training dummy)
     bool carryable = false; // light props can be E-carried; heavy/static cannot
     bool gear = false;      // non-weapon equipment pickup (shield): E equips it
+
+    // --- RPG sandbox fields (all optional; empty/zero = not that thing) ---
+
+    // Resource node: E gathers harvestCount of this item per hit; after
+    // harvestHits gathers the node depletes (then the respawn rule applies).
+    // An equipped tool whose toolClass matches doubles the yield.
+    std::string harvestItemId; // "wood", "stone", "ore"
+    int harvestCount = 1;
+    int harvestHits = 3;
+    std::string toolClass;     // "axe", "pickaxe"; "" = any/no tool bonus
+
+    // Ground item: E picks it up into the item inventory (mob drops, loose
+    // resources). Distinct from weaponId pickups, which are the legacy
+    // sandbox weapon system.
+    std::string itemId;
+    int itemCount = 1;
+
+    // Loot: when this entity is destroyed it drops lootCount of this item
+    // into the world as a ground-item entity ("drop_<itemId>" def).
+    std::string lootItemId;
+    int lootCount = 1;
+
+    // Simple mob: chases the player when near and strikes on contact.
+    bool hostile = false;
+    float contactDamage = 6.0f;
 
     // Respawn rule, stated once here and honored everywhere: after this many
     // seconds a taken pickup / destroyed bot comes back at its spawn point.

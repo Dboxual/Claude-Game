@@ -48,8 +48,19 @@ void World::addEntity(const EntityDef& def, const glm::vec3& pos, float respawnO
     e.weaponId = def.weaponId;
     e.maxHealth = def.maxHealth;
     e.respawnSeconds = respawnOverride >= 0.0f ? respawnOverride : def.respawnSeconds;
+    e.harvestItemId = def.harvestItemId;
+    e.harvestCount = def.harvestCount;
+    e.harvestHits = def.harvestHits;
+    e.toolClass = def.toolClass;
+    e.itemId = def.itemId;
+    e.itemCount = def.itemCount;
+    e.lootItemId = def.lootItemId;
+    e.lootCount = def.lootCount;
+    e.hostile = def.hostile;
+    e.contactDamage = def.contactDamage;
     e.id = nextEntityId_++;
     e.health = def.maxHealth;
+    e.hitsLeft = def.harvestHits;
     entities_.push_back(std::move(e));
 }
 
@@ -76,6 +87,7 @@ void World::tick(float dt) {
                 e.active = true;
                 e.health = e.maxHealth;
                 e.hitFlash = 0.0f;
+                e.hitsLeft = e.harvestHits; // depleted nodes come back full
             }
         }
     }
@@ -98,7 +110,8 @@ World::EntityHit World::raycastEntities(const glm::vec3& origin, const glm::vec3
         const WorldEntity& e = entities_[i];
         if (!e.active || e.carried) continue;
         if (mask == RayMask::Interactables) {
-            if (e.weaponId.empty() && !e.carryable && !e.gear) continue;
+            if (e.weaponId.empty() && !e.carryable && !e.gear &&
+                e.harvestItemId.empty() && e.itemId.empty()) continue;
         } else { // AttackTargets: bullets pass through non-solid pickups
             if (!e.solid && e.maxHealth <= 0.0f) continue;
         }
@@ -159,51 +172,49 @@ void World::buildFlatMap() {
     spawnPoint = {0.0f, 0.01f, 0.0f};
 }
 
-// A 40x40 m enclosed arena. There is intentionally no step-up mechanic yet,
-// so every walkable surface is flat and elevation changes go through jumps.
+// The RPG sandbox test zone: a 40x40 m grassy glade ringed by earthen
+// cliffs. Terrain only - trees, rocks, ore, mobs, and props are entities
+// placed by Game::startTestWorld so they can respawn, be gathered, and be
+// saved. No step-up mechanic yet, so elevation changes go through jumps.
 void World::buildTestMap() {
     boxes_.clear();
     entities_.clear();
 
-    const glm::vec3 floorGrey{0.62f, 0.64f, 0.66f};
-    const glm::vec3 wallSlate{0.35f, 0.42f, 0.52f};
-    const glm::vec3 crateOrange{0.85f, 0.55f, 0.25f};
-    const glm::vec3 stepTeal{0.30f, 0.65f, 0.60f};
-    const glm::vec3 tunnelPurple{0.55f, 0.45f, 0.65f};
-    const glm::vec3 pillarRed{0.70f, 0.35f, 0.35f};
+    const glm::vec3 grass{0.36f, 0.58f, 0.30f};
+    const glm::vec3 grassLight{0.42f, 0.64f, 0.33f};
+    const glm::vec3 dirt{0.52f, 0.40f, 0.26f};
+    const glm::vec3 cliff{0.48f, 0.42f, 0.36f};
+    const glm::vec3 cliffTop{0.40f, 0.52f, 0.30f};
+    const glm::vec3 stone{0.55f, 0.55f, 0.58f};
 
-    // Floor (checkered so speed is easy to read) and perimeter walls.
-    add({-20, -1, -20}, {20, 0, 20}, floorGrey, true);
-    add({-20, 0, -21}, {20, 4, -20}, wallSlate); // north
-    add({-20, 0, 20}, {20, 4, 21}, wallSlate);   // south
-    add({-21, 0, -20}, {-20, 4, 20}, wallSlate); // west
-    add({20, 0, -20}, {21, 4, 20}, wallSlate);   // east
+    // Grass floor and the cliff ring boxing the zone in. The cliffs get a
+    // grassy cap so the horizon reads "hills", not "arena walls".
+    add({-20, -1, -20}, {20, 0, 20}, grass);
+    add({-20, 0, -21}, {20, 4, -20}, cliff);   // north
+    add({-20, 4, -21}, {20, 4.6f, -20}, cliffTop);
+    add({-20, 0, 20}, {20, 4, 21}, cliff);     // south
+    add({-20, 4, 20}, {20, 4.6f, 21}, cliffTop);
+    add({-21, 0, -20}, {-20, 4, 20}, cliff);   // west
+    add({-21, 4, -20}, {-20, 4.6f, 20}, cliffTop);
+    add({20, 0, -20}, {21, 4, 20}, cliff);     // east
+    add({20, 4, -20}, {21, 4.6f, 20}, cliffTop);
 
-    // Crate row east of spawn: 0.5 m and 1.0 m (both jumpable with the ~1.3 m
-    // jump apex), 1.5 m (needs a hop from a crate - a reference obstacle).
-    add({4.0f, 0, -2.0f}, {5.5f, 0.5f, -0.5f}, crateOrange, true);
-    add({7.0f, 0, -2.0f}, {8.5f, 1.0f, -0.5f}, crateOrange, true);
-    add({10.0f, 0, -2.0f}, {11.5f, 1.5f, -0.5f}, crateOrange, true);
+    // Dirt path from spawn north toward the goblin camp, with a fork east
+    // to the mining corner. Thin plates on the grass (no step: 2 cm).
+    add({-1.2f, 0, -14.0f}, {1.2f, 0.02f, 2.0f}, dirt);
+    add({1.2f, 0, -9.5f}, {12.0f, 0.02f, -7.0f}, dirt);
 
-    // Jump staircase up to a 2 m platform (0.5 m rises, all jumpable).
-    add({-6, 0, 6}, {-4, 0.5f, 8}, stepTeal, true);
-    add({-8, 0, 6}, {-6, 1.0f, 8}, stepTeal, true);
-    add({-10, 0, 6}, {-8, 1.5f, 8}, stepTeal, true);
-    add({-14, 0, 6}, {-10, 2.0f, 10}, stepTeal, true);
+    // Village green by spawn: a lighter grass patch marking "home".
+    add({-6.5f, 0, 1.0f}, {-1.5f, 0.02f, 6.0f}, grassLight);
 
-    // Crouch tunnel: 2 m wide gap with a roof 1.4 m up - stand height (1.8)
-    // does not fit, crouch height (1.3) does.
-    add({2, 0, 9.6f}, {8, 2.2f, 10.0f}, tunnelPurple);     // near side wall
-    add({2, 0, 12.0f}, {8, 2.2f, 12.4f}, tunnelPurple);    // far side wall
-    add({2, 1.4f, 10.0f}, {8, 2.2f, 12.4f}, tunnelPurple); // roof
+    // Mining corner (east): a low stone shelf the ore sits against - one
+    // jumpable step so movement still has something to climb.
+    add({13.0f, 0, -13.0f}, {19.5f, 1.0f, -8.0f}, stone, true);
+    add({14.5f, 1.0f, -12.0f}, {19.5f, 1.8f, -9.0f}, stone, true);
 
-    // Pillars for strafe practice.
-    add({-4.5f, 0, -8.5f}, {-3.5f, 3, -7.5f}, pillarRed);
-    add({-7.5f, 0, -8.5f}, {-6.5f, 3, -7.5f}, pillarRed);
-    add({-10.5f, 0, -8.5f}, {-9.5f, 3, -7.5f}, pillarRed);
+    // Goblin camp mound (north): raised dirt disc so the camp reads as a
+    // place from across the map.
+    add({-9.0f, 0, -17.5f}, {-2.0f, 0.35f, -11.5f}, dirt, true);
 
-    // A long wall segment mid-map for wall-sliding and counter-strafe drills.
-    add({-2, 0, -14}, {14, 2.5f, -13.4f}, wallSlate);
-
-    spawnPoint = {0.0f, 0.01f, 0.0f};
+    spawnPoint = {0.0f, 0.01f, 8.0f};
 }

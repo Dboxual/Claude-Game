@@ -23,7 +23,9 @@ struct InputState {
     bool reloadConfigPressed = false;
     bool toggleHudPressed = false;
     bool spawnMenuPressed = false; // B toggles the dev spawn menu in-game
-    bool interactPressed = false;  // E: pick up / use what the player looks at
+    bool inventoryPressed = false; // Tab or I: toggle the inventory/crafting screen
+    bool cameraTogglePressed = false; // T: first person <-> third person
+    bool interactPressed = false;  // E: pick up / gather / use what the player looks at
     bool attackPressed = false;    // left mouse edge (gameplay attack)
     bool kickPressed = false;      // F: kick (opens raised guards)
     bool jabPressed = false;       // V: short pommel bash (interrupts windups)

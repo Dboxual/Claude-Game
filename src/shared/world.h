@@ -44,6 +44,18 @@ struct WorldEntity {
     float maxHealth = 0.0f;      // >0 = damageable
     float respawnSeconds = 0.0f; // 0 = never respawns (consumed/destroyed for good)
 
+    // RPG snapshot (see EntityDef for semantics).
+    std::string harvestItemId;   // non-empty = resource node
+    int harvestCount = 1;
+    int harvestHits = 3;
+    std::string toolClass;
+    std::string itemId;          // non-empty = ground item pickup
+    int itemCount = 1;
+    std::string lootItemId;      // dropped into the world on destruction
+    int lootCount = 1;
+    bool hostile = false;        // simple mob: chases + contact attack
+    float contactDamage = 6.0f;
+
     // Runtime.
     unsigned id = 0;         // stable per-world handle (indices shift on erase)
     bool active = true;      // false = picked up / destroyed, waiting to respawn
@@ -51,6 +63,7 @@ struct WorldEntity {
     float health = 0.0f;
     float respawnTimer = 0.0f;
     float hitFlash = 0.0f;   // seconds of red flash left after taking a hit
+    int hitsLeft = 0;        // resource nodes: gathers remaining before depletion
 
     AABB bounds() const {
         glm::vec3 half(size.x * 0.5f, 0.0f, size.z * 0.5f);
