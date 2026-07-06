@@ -19,6 +19,10 @@ public:
     // Draws the frame and presents it.
     virtual void render(const RenderFrame& frame) = 0;
 
+    // Dev/testing hook (--screenshot): the next rendered frame is also
+    // written to this path as a BMP. Backends without readback ignore it.
+    virtual void requestScreenshot(const std::string& path) { (void)path; }
+
     virtual const char* name() const = 0;
 };
 

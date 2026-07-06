@@ -35,6 +35,8 @@ int main(int argc, char** argv) {
     bool startInWorld = false; // --world: skip the main menu, straight into the test world
     bool startPaused = false;  // --paused: start in-world on the pause menu (dev/testing)
     const char* equipWeapon = nullptr; // --equip <id>: start in-world holding a weapon
+    const char* shotPath = nullptr;    // --screenshot <path>: BMP of the last frame
+    long long fireAtFrame = -1;        // --fire-at N: inject one attack press (dev/testing)
     bool forceNoVsync = false;
     WindowDesc desc;
     desc.title = "TacMove - Movement Prototype (Milestone 1)";
@@ -53,6 +55,10 @@ int main(int argc, char** argv) {
             startInWorld = true;
         } else if (std::strcmp(argv[i], "--equip") == 0 && i + 1 < argc) {
             equipWeapon = argv[++i];
+        } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
+            shotPath = argv[++i];
+        } else if (std::strcmp(argv[i], "--fire-at") == 0 && i + 1 < argc) {
+            fireAtFrame = std::atoll(argv[++i]);
         }
     }
 
@@ -106,7 +112,16 @@ int main(int argc, char** argv) {
         int w = 0, h = 0;
         platform.window->pixelSize(w, h);
 
-        game.update(in, frameDt, w, h);
+        // Dev input injection: one synthetic attack press, so automated runs
+        // can capture tracers / swing animation mid-flight.
+        if (fireAtFrame >= 0 && frameCount == fireAtFrame) {
+            InputState synthetic = in;
+            synthetic.attackPressed = true;
+            synthetic.attackHeld = true;
+            game.update(synthetic, frameDt, w, h);
+        } else {
+            game.update(in, frameDt, w, h);
+        }
         if (game.quitRequested()) break;
 
         // Mouse-capture policy: captured while playing, free in any menu.
@@ -133,6 +148,11 @@ int main(int argc, char** argv) {
             game.clearSettingsDirty();
         }
 
+        // Dev screenshot: capture the last frame of a --frames run (or an
+        // early frame of an open-ended one) for automated visual checks.
+        if (shotPath && frameCount == (maxFrames > 0 ? maxFrames - 1 : 90)) {
+            renderer->requestScreenshot(shotPath);
+        }
         renderer->render(game.buildRenderFrame(w, h));
 
         ++frameCount;

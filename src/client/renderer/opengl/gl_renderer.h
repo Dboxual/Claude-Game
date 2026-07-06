@@ -11,6 +11,7 @@ public:
     bool init(IWindow& window) override;
     void shutdown() override;
     void render(const RenderFrame& frame) override;
+    void requestScreenshot(const std::string& path) override { shotPath_ = path; }
     const char* name() const override { return "OpenGL 3.3"; }
 
 private:
@@ -19,9 +20,11 @@ private:
     void drawViewmodel(const RenderFrame& frame);
     void drawRects(const RenderFrame& frame);
     void drawTexts(const RenderFrame& frame);
+    void writePendingScreenshot(int w, int h); // BMP dump before present
     void addTextQuads(float x, float y, float scale, const float rgba[4], const std::string& text);
 
     IWindow* window_ = nullptr;
+    std::string shotPath_; // non-empty = dump the next frame, then clear
 
     GLuint worldProg_ = 0;
     GLuint cubeVao_ = 0;

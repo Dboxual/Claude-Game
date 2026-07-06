@@ -43,6 +43,8 @@ using GLintptr = std::ptrdiff_t;
 #define GL_DEPTH_TEST            0x0B71
 #define GL_BLEND                 0x0BE2
 #define GL_UNPACK_ALIGNMENT      0x0CF5
+#define GL_PACK_ALIGNMENT        0x0D05
+#define GL_RGBA                  0x1908
 #define GL_TEXTURE_2D            0x0DE1
 #define GL_UNSIGNED_BYTE         0x1401
 #define GL_UNSIGNED_INT          0x1405
@@ -81,6 +83,7 @@ using GLintptr = std::ptrdiff_t;
     X(void, glCullFace, GLenum) \
     X(void, glFrontFace, GLenum) \
     X(void, glPixelStorei, GLenum, GLint) \
+    X(void, glReadPixels, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*) \
     X(void, glGenTextures, GLsizei, GLuint*) \
     X(void, glDeleteTextures, GLsizei, const GLuint*) \
     X(void, glBindTexture, GLenum, GLuint) \

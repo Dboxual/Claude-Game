@@ -1,107 +1,127 @@
-TacMove — WIP status (branch wip-m3-content-platform, 2026-07-05, update 6)
+TacMove — WIP status (branch wip-m3-content-platform, 2026-07-06, update 7)
 ============================================================================
 
-Sixth drop: the POLISH pass. Direction changed - no more platform/PvP
-feature chasing; make what exists feel like a real playable game. This
-drop touches presentation, feel, and first-run experience only; no new
-systems, one system deliberately simplified.
+Seventh drop: FEEL/FIX pass on the playtest complaints. No new systems
+except player health (which the playtest explicitly asked for); everything
+else is fixing what already existed: tracers, gun audio, animation
+readability, HUD. First drop built AND visually verified on macOS
+(Apple M2, OpenGL backend) via a new automated screenshot hook.
 
-DONE THIS DROP (built on Windows x64, client + server, /W4 zero warnings)
+DONE THIS DROP (built on macOS arm64, client + server, zero warnings)
 --------------------------------------------------------------------------
-POLISHED:
-- The test arena is furnished (Game::startTestWorld): a weapon rack on the
-  crate row (sword/glock/karambit, one per step height), a shield nearby,
-  a training corner by the strafe pillars (training dummy + duelist bot),
-  a crate stack and barrels near spawn to carry around. Arena-only respawn
-  overrides (pickups 15 s, bots 10 s) keep the playground stocked; created
-  worlds keep the nothing-respawns default. Opening the game now demos
-  every system with zero spawn-menu knowledge.
-- Sky: vertical gradient (deep blue zenith -> fog-colored horizon) drawn
-  behind the world via the rect pipeline (GLRenderer::drawSky). The void
-  above the arena walls finally reads as sky, and the fog line blends
-  into it instead of hitting a flat clear color.
-- Glock feel: bullet tracers (bright thinning line from muzzle to impact,
-  60 ms, world-space oriented boxes) + impact puff sparks wherever the
-  shot lands + slight per-shot pitch variation. Shots visibly travel and
-  hit something now.
-- Viewmodel feel: look sway (hands lag a beat behind the camera and
-  settle), landing dip scaled by fall speed, both on the shared root so
-  every weapon gets them. Footsteps got pitch variation (0.92-1.08) and
-  landing plays a low thud - IAudio::playSound grew an optional pitch
-  parameter (SDL_SetAudioStreamFrequencyRatio under the hood).
-- Prop carrying: the carried prop now pulls in toward you when a wall is
-  closer than the hold distance (raycast clamp) - it can no longer stick
-  through geometry while carried. Dropping tries several spots from the
-  hold point inward, settles each candidate onto the floor/stack below,
-  and only places where nothing overlaps (walls, props, or the player);
-  if nowhere fits you keep carrying and get told "NO ROOM TO DROP IT
-  HERE". Nothing can be wedged into level geometry anymore. Quit-to-menu
-  still force-drops safely if the search fails.
-- First-run clarity: the debug HUD now DEFAULTS OFF (F1 brings it back;
-  existing settings.cfg files keep whatever they had). In its place, a
-  clean 8-second control hint fades in at the bottom on every spawn:
-  "WASD MOVE  E INTERACT  LMB ATTACK  RMB BLOCK  B SPAWN MENU  ESC MENU".
-  Stamina bar only shows while a melee weapon is held (the pistol never
-  spends it). Main-menu subtitle is now "FIRST-PERSON SANDBOX PROTOTYPE"
-  and the footer says plainly: local play, protocol reserved.
+FIXED - GUN AUDIO (the real bug): SdlAudio dropped a sound when all 8
+  voices were busy. Footsteps + rapid shots + impact sounds starve 8
+  voices easily, so gunshots randomly vanished. Now 16 voices and, when
+  full, the OLDEST voice is stolen round-robin (SDL_ClearAudioStream)
+  instead of dropping the new sound. A cut footstep tail is inaudible; a
+  swallowed gunshot was the "gun sounds missing" report. Volumes still
+  applied per-play as master*sfx from the settings screen.
+  Dry-fire click NOT added: there is no ammo system, so nothing can dry-fire.
 
-SIMPLIFIED / HIDDEN (half-baked things that made it feel worse):
-- The 5-tab server-browser shell (Online/Favorites/LAN/History/Direct
-  Connect) is GONE from the UI. Four permanently-empty tabs of "nothing
-  here yet" made the game feel more unfinished, not more ambitious. The
-  Multiplayer screen is now ONE honest screen: server address box,
-  Connect (still reports the connection system does not exist),
-  localhost shortcut, and a single line - "online play arrives with the
-  networking milestone". The removed shell is trivial to resurrect from
-  git history when real discovery exists; ONLINE_SERVERS.md (the design
-  doc for that milestone) is untouched. mpTab_ and the SelectMpTab
-  button id were deleted outright, not commented out.
+FIXED - TRACERS: were a full-length instant line from a rough eye offset
+  (they smeared across the screen for one frame and read as broken). Now:
+  a short bright streak (max 2.4 m) that leaves the muzzle position and
+  TRAVELS to the impact point at ~130 m/s visible speed; only the
+  traveled part is drawn, thick enough (4.5 cm) to survive projection
+  when flying nearly parallel to your own view ray. The impact puff
+  (sparks + a bright flash) pops when the tracer ARRIVES, exactly where
+  the shot landed. Verified frame-by-frame with screenshots: muzzle
+  flash on the shot frame, amber dash converging on the crosshair
+  mid-flight, impact flash dead-center on arrival at a 13 m wall.
+
+NEW - PLAYER HEALTH + HEALTH BAR: duelist bot Hit/Interrupted strikes now
+  deal real damage (melee::damageOf over a 12 base, so ~12-14 per hit).
+  Clean bar bottom-left: color walks green -> amber -> red, a ghost bar
+  visibly drains after damage (the shown value eases toward the real
+  one), the fill flashes white on the hit frame, number next to it.
+  Slow regen (8/s) after 5 s out of trouble keeps the sandbox friendly.
+  Going down is soft: respawn at spawn with full health, weapons kept,
+  carried prop released + settled, big flash/shake + toast. The old red
+  damage vignette still layers on top.
+
+ANIMATION READABILITY:
+  - Fists finally BOX: a left slash is thrown by the LEFT fist (the
+    other stays in guard); everything else stays on the right. The old
+    everything-on-one-fist version was most of "melee looks weird".
+  - Active-phase sweep uses smoothstep, not linear - the blade
+    accelerates out of the windup and decelerates into the strike point.
+  - Stab pulls to the hip and thrusts visibly deeper (-0.46 vs -0.36);
+    jab pops further; kick boot extension smoothstepped.
+  - Glock recoil: quadratic snap-decay on the muzzle rise (17 deg), a
+    touch of roll, straight-back shove - fast up, quick settle.
+
+ITEM/WORLD READABILITY: weapon pickups now hover AND slowly spin
+  (world-space oriented boxes) - they read as items, not stray geometry.
+  Bot target readout lost its debug-y stamina number (name + health +
+  state words stay).
+
+HUD CLEANUP: crosshair is four drawn arms with a center gap (rects, not
+  a font "+"). Default screen shows ONLY: crosshair, health bar, stamina
+  bar (melee in hand only), weapon slots, interaction prompts, toasts,
+  the 8 s spawn hint. Debug HUD stays F1. NOTE: the local settings.cfg
+  had show_debug_hud=1 left over from an old default - that is why the
+  playtest saw debug spam. Flipped to 0 locally; fresh installs were
+  already clean.
+
+NEW DEV TOOLING (small, permanent, this is how this drop was verified):
+  - --screenshot <path>: dumps the last rendered frame as a BMP
+    (glReadPixels in the GL backend; IRenderer::requestScreenshot is a
+    default-no-op for other backends). Works headless-ish with --frames.
+  - --fire-at N: injects one synthetic attack press at frame N, so an
+    automated run can capture recoil/tracers/swings mid-flight.
+  - gl_loader grew glReadPixels + GL_PACK_ALIGNMENT/GL_RGBA.
 
 VERIFIED THIS DROP
 ------------------
-- Clean /W4 build of client + server, zero warnings.
-- Smoke tests pass with a FRESH settings.cfg (exercises the new HUD
-  default): client --world --frames 240 exit 0, server --ticks 256 exit 0.
-- NOT visually verified this session: the user was actively using the
-  machine when the screenshot pass started, so it was aborted immediately
-  (a game window popping over someone mid-typing is worse than an
-  unverified gradient). Everything added draws through already-verified
-  paths (orientedBoxes, rect pipeline, HUD text), but the first human run
-  should eyeball: sky gradient colors, arena item placement (nothing
-  floating/intersecting), tracer look, sway/land-dip amounts.
+- Clean build of client + server on macOS arm64, zero warnings.
+- Smoke: client --world --frames 240 exit 0; server --ticks 256 exit 0.
+- Screenshot-verified on the real game window pipeline: arena furnishing,
+  sky gradient, clean default HUD, health bar, new crosshair, glock
+  viewmodel + muzzle flash + recoil pose, tracer mid-flight, impact
+  flash at the crosshair, sword mid-slash pose, karambit mid-slash,
+  fists punch with proper guard hand, spinning sword pickup on the rack.
+- NOT verified by a human hand yet (needs real mouse/keyboard): melee
+  vs the duel bot end-to-end (damage numbers land through code review +
+  compile only), pickup/drop/carry round trip this session (unchanged
+  code, tested last drop), SFX volume sliders by ear, punch alternation
+  in continuous combat. First human run should feel: tracer speed
+  (130 m/s - too slow/fast?), bot damage (12-14/hit), regen pacing.
 
 WHERE THE NUMBERS LIVE (for taste tuning)
 -----------------------------------------
-- Arena layout: Game::startTestWorld (game.cpp) - place() calls.
-- Sky colors: GLRenderer::drawSky (gl_renderer.cpp) - t[] / b[].
-- Sway/dip/bob strengths: the rootPos block in appendViewmodelDraws.
-- Tracer look: the Tracer block in tryAttack + the draw in
-  buildRenderFrame.
-- Footstep/land pitches: the tick loop in Game::update.
+- Tracer speed/thickness/streak: tryAttack (spawn) + the Tracer block in
+  buildRenderFrame (draw) in game.cpp.
+- Health/regen/bot damage: damagePlayer, applyBotStrikeOnPlayer, the
+  regen block in Game::update.
+- Health bar look: the block above the stamina bar in appendHudDraws.
+- Punch/slash/stab keyframes: keyFor in appendViewmodelDraws.
+- Voice pool: kVoices in sdl_audio.cpp.
 
 UNFINISHED (known, deliberate)
 ------------------------------
-- No player health; duel bot hits remain feedback-only training.
-- Melee kept in full (it is stable and tested); its controls are the
-  richest part of the game - the spawn hint plus F1 cover discovery.
-- Server binary still config-only; combat/sim wiring is the networking
-  milestone. Maps still code-built; music slider still drives nothing.
-- Load World list still caps at 7; fine until someone has 8 worlds.
+- Bots still cannot die "at" you - they have no damage numbers of their
+  own beyond the existing health bar; no death animation, they just pop.
+- Tracer origin is an approximation of the on-screen muzzle (viewmodel
+  renders through its own FOV projection; exact match is impossible).
+- No ammo, so no reload or dry-fire. Music slider still drives nothing.
+- Viewmodels are still box-art. Better proportions, but they will look
+  placeholder until a real art pipeline exists.
+- --fire-at only injects ATTACK; kicks/blocks still need a human.
 
 BROKEN / WATCH OUT
 ------------------
-- IAudio::playSound signature changed (added pitch with a default) - any
-  future IAudio implementation must match the two-argument form.
-- config/settings.cfg is gitignored but persists locally: your existing
-  file still has show_debug_hud from before, so YOU may still see the
-  debug HUD while fresh installs will not. Delete the file or press F1.
-- The test arena now adds entities every time it starts; if kMaxEntities
-  (256) ever feels tight in the arena, the furniture is the first 11.
+- IRenderer grew requestScreenshot (virtual, default no-op) - out-of-tree
+  backends recompile fine but ignore it.
+- config/settings.cfg is local/gitignored: this drop set show_debug_hud=0
+  in YOUR copy. F1 brings it back any time.
+- Player health lives in the client (playerHealth_ in game.cpp), NOT in
+  shared/ - when the server milestone lands it must move server-side.
 
 BUILD / RUN
 -----------
   Windows: run_windows.bat        (smoke: --frames 240 --world --novsync)
   macOS:   ./run_macos.sh         Linux: ./run_linux.sh
-  Server:  build\Release\tacmove_server.exe --ticks 384
+  Server:  build/tacmove_server --ticks 384
   Sounds:  see header of tools/generate_sounds.cpp (cl or c++, no deps)
-  Dev:     tacmove --equip sword  (straight into the world holding it)
+  Dev:     tacmove --equip glock --fire-at 290 --frames 296 \
+                   --screenshot shot.bmp   (automated visual check)

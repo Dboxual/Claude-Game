@@ -201,6 +201,8 @@ void Game::beginSession() {
     tracers_.clear();
     bots_.clear();
     hitStop_ = shakeTime_ = shakeAmp_ = damageFlash_ = 0.0f;
+    playerHealth_ = playerHealthShown_ = 100.0f;
+    sinceDamaged_ = 999.0f;
     swayX_ = swayY_ = landDipTimer_ = landDipAmount_ = 0.0f;
     wasGrounded_ = true;
     controlHintTimer_ = 8.0; // a few seconds of "here's how to play"
@@ -572,18 +574,23 @@ void Game::tryAttack() {
     World::EntityHit hit =
         world_.raycastEntities(eye, dir, geoT, World::RayMask::AttackTargets);
 
-    // Tracer + impact puff: the shot visibly travels and lands somewhere.
+    // Tracer: a short streak that leaves the muzzle and travels to the
+    // impact point at a visible speed; the impact puff pops when it ARRIVES
+    // (handled in the update loop), not the instant the trigger clicks.
+    // The muzzle offset approximates where the viewmodel muzzle sits on
+    // screen (the viewmodel renders through its own fixed-FOV projection,
+    // so a perfect match is impossible by design - close is correct here).
     float endT = hit.index >= 0 ? hit.t : geoT;
     glm::vec3 impact = eye + dir * endT;
     glm::vec3 right = glm::normalize(glm::cross(dir, glm::vec3(0.0f, 1.0f, 0.0f)));
+    glm::vec3 up = glm::normalize(glm::cross(right, dir));
     Tracer tr;
-    tr.from = eye + dir * 0.45f + right * 0.06f - glm::vec3(0.0f, 0.07f, 0.0f);
+    tr.from = eye + dir * 0.60f + right * 0.17f - up * 0.125f;
     tr.to = impact;
-    tr.life = tr.total = 0.06f;
+    float dist = glm::length(tr.to - tr.from);
+    tr.life = tr.total = std::max(0.02f, dist / 130.0f); // ~130 m/s visible speed
+    tr.impact = endT < weapon->range - 0.01f;
     tracers_.push_back(tr);
-    if (endT < weapon->range) {
-        addSparks(impact, 3, {0.85f, 0.82f, 0.75f});
-    }
     if (hit.index < 0) return;
 
     const WorldEntity& target = world_.entities()[size_t(hit.index)];
@@ -864,16 +871,18 @@ void Game::applyBotStrikeOnPlayer(melee::Actor& bot) {
     glm::vec3 clash = eyePosition() + lookDirection() * 0.7f - glm::vec3(0.0f, 0.12f, 0.0f);
     using melee::Outcome;
     switch (out) {
-    case Outcome::Hit: // no player health yet: feedback teaches the lesson
+    case Outcome::Hit:
         damageFlash_ = 0.4f;
         triggerShake(0.7f, 0.3f);
         sfx("melee_hit");
+        damagePlayer(melee::damageOf(bot, 12.0f)); // bot blade: modest base damage
         showToast("HIT - HOLD RIGHT CLICK TO BLOCK");
         break;
     case Outcome::Interrupted: // caught mid-windup: your swing is gone too
         damageFlash_ = 0.45f;
         triggerShake(0.75f, 0.3f);
         sfx("melee_hit");
+        damagePlayer(melee::damageOf(bot, 12.0f));
         showToast("INTERRUPTED - DON'T SWING INTO ITS ATTACK");
         break;
     case Outcome::Deflected: // your riposte windup shrugged it off
@@ -1051,6 +1060,36 @@ void Game::updateSparks(float dt) {
         p.pos += p.vel * dt;
         ++i;
     }
+}
+
+// Real damage on the player (duelist bot strikes). Going down is soft in
+// the sandbox: you respawn at the spawn point with full health and keep
+// your weapons - the lesson is the drained bar, not lost progress.
+void Game::damagePlayer(float amount) {
+    if (amount <= 0.0f) return;
+    playerHealth_ = std::max(0.0f, playerHealth_ - amount);
+    sinceDamaged_ = 0.0f;
+    if (playerHealth_ > 0.0f) return;
+
+    player_.respawn(world_.spawnPoint);
+    player_.vel = glm::vec3(0.0f);
+    prevPos_ = player_.pos;
+    playerHealth_ = 100.0f;
+    playerHealthShown_ = 0.0f; // the bar visibly refills on respawn
+    playerMelee_ = melee::Actor{};
+    prevMeleePhase_ = melee::Phase::Idle;
+    if (carriedEntityId_ != 0) { // release the held prop and settle it down
+        if (WorldEntity* held = world_.entityById(carriedEntityId_)) {
+            held->carried = false;
+            glm::vec3 from = held->pos + glm::vec3(0.0f, 0.05f, 0.0f);
+            float down = world_.raycastGeometry(from, glm::vec3(0.0f, -1.0f, 0.0f), 50.0f);
+            if (down < 50.0f) held->pos.y = from.y - down + 0.01f;
+        }
+        carriedEntityId_ = 0;
+    }
+    damageFlash_ = 0.9f;
+    triggerShake(1.0f, 0.5f);
+    showToast("YOU WENT DOWN - BACK AT SPAWN");
 }
 
 void Game::triggerShake(float amplitude, float seconds) {
@@ -1236,6 +1275,17 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     damageFlash_ = std::max(0.0f, damageFlash_ - dt * 1.8f);
     if (hudToastTimer_ > 0.0) hudToastTimer_ -= frameDt;
 
+    // Health: slow regen once you have stayed out of trouble for a few
+    // seconds (sandbox-friendly - a lost duel round is not a dead end),
+    // and the shown bar eases toward the real value so damage reads as a
+    // visible drain instead of a teleporting rectangle.
+    sinceDamaged_ += dt;
+    if (sinceDamaged_ > 5.0f && playerHealth_ < 100.0f) {
+        playerHealth_ = std::min(100.0f, playerHealth_ + 8.0f * dt);
+    }
+    playerHealthShown_ += (playerHealth_ - playerHealthShown_)
+                          * std::min(1.0f, 6.0f * float(frameDt));
+
     // Viewmodel bob: phase advances with distance so it locks to the
     // footstep cadence (one dip every ~2.1 m); intensity eases in and out
     // so stopping settles the hands instead of freezing them mid-offset.
@@ -1253,11 +1303,25 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     landDipTimer_ = std::max(0.0f, landDipTimer_ - float(frameDt));
     if (controlHintTimer_ > 0.0) controlHintTimer_ -= frameDt;
 
-    // Bullet tracers fade fast.
+    // Bullet tracers travel; on arrival the impact puff pops exactly where
+    // the shot landed (a bright flash plus a few sparks).
     for (size_t i = 0; i < tracers_.size();) {
         tracers_[i].life -= dt;
-        if (tracers_[i].life <= 0.0f) tracers_.erase(tracers_.begin() + long(i));
-        else ++i;
+        if (tracers_[i].life <= 0.0f) {
+            if (tracers_[i].impact) {
+                glm::vec3 at = tracers_[i].to;
+                addSparks(at, 4, {0.95f, 0.85f, 0.55f});
+                Spark flash;
+                flash.pos = at;
+                flash.color = {1.0f, 0.95f, 0.75f};
+                flash.life = flash.total = 0.07f;
+                flash.size = 5.0f;
+                sparks_.push_back(flash);
+            }
+            tracers_.erase(tracers_.begin() + long(i));
+        } else {
+            ++i;
+        }
     }
 
     // Weapon switch (slot key or pickup) plays the raise animation and
@@ -1557,6 +1621,18 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         frame.boxes.push_back(draw);
     }
 
+    // World-space oriented boxes: spinning weapon pickups, duelist bot
+    // weapon telegraphs, thrown weapons tumbling through the air, sparks,
+    // bullet tracers.
+    auto obox = [&frame](const glm::mat4& parent, glm::vec3 pos, glm::vec3 rotDeg,
+                         glm::vec3 size, glm::vec3 color, float emissive = 0.0f) {
+        ViewmodelBoxDraw d;
+        d.transform = glm::scale(vmCompose(parent, pos, rotDeg), size);
+        d.color = color;
+        d.emissive = emissive;
+        frame.orientedBoxes.push_back(d);
+    };
+
     // Spawned sandbox entities (pickups, bots, props). Multi-part visuals
     // come from the content def; collision stays the plain entity AABB.
     for (size_t ei = 0; ei < world_.entities().size(); ++ei) {
@@ -1592,7 +1668,16 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         }
 
         const EntityDef* def = content_.find(e.defId);
-        if (def && !def->visual.empty()) {
+        if (def && !def->visual.empty() && !e.weaponId.empty()) {
+            // Weapon pickups hover (base bob above) AND slowly spin, so
+            // they read as items to grab instead of stray level geometry.
+            float spinDeg = float(std::fmod(menuTime_ * 42.0 + double(e.id) * 47.0, 360.0));
+            glm::mat4 group = vmCompose(glm::translate(glm::mat4(1.0f), base),
+                                        glm::vec3(0.0f), {0.0f, spinDeg, 0.0f});
+            for (const VisualPart& part : def->visual) {
+                obox(group, part.offset, {0, 0, 0}, part.size, part.color);
+            }
+        } else if (def && !def->visual.empty()) {
             float entityH = std::max(0.2f, e.size.y);
             for (const VisualPart& part : def->visual) {
                 BoxDraw draw;
@@ -1611,17 +1696,6 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
             frame.boxes.push_back(draw);
         }
     }
-
-    // World-space oriented boxes: duelist bot weapon telegraphs, thrown
-    // weapons tumbling through the air, spark particles.
-    auto obox = [&frame](const glm::mat4& parent, glm::vec3 pos, glm::vec3 rotDeg,
-                         glm::vec3 size, glm::vec3 color, float emissive = 0.0f) {
-        ViewmodelBoxDraw d;
-        d.transform = glm::scale(vmCompose(parent, pos, rotDeg), size);
-        d.color = color;
-        d.emissive = emissive;
-        frame.orientedBoxes.push_back(d);
-    };
 
     // Bot blades: the telegraph IS the animation. The blade winds to the
     // side the cut will come from (that side + the windup cue is what you
@@ -1714,25 +1788,33 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
 
     // Sparks: tiny unlit cubes that shrink as they die.
     for (const Spark& p : sparks_) {
-        float sz = 0.008f + 0.028f * (p.life / p.total);
+        float sz = (0.008f + 0.028f * (p.life / p.total)) * p.size;
         obox(glm::translate(glm::mat4(1.0f), p.pos), glm::vec3(0.0f),
              glm::vec3(0.0f), {sz, sz, sz}, p.color, 1.0f);
     }
 
-    // Bullet tracers: a bright thinning line from muzzle to impact.
+    // Bullet tracers: a short bright streak flying from muzzle to impact.
+    // Only the traveled part is ever drawn, so nothing smears across the
+    // screen or hangs in the world.
     for (const Tracer& t : tracers_) {
         glm::vec3 seg = t.to - t.from;
         float len = glm::length(seg);
         if (len < 0.05f) continue;
         glm::vec3 d = seg / len;
+        float progress = glm::clamp(1.0f - t.life / t.total, 0.0f, 1.0f);
+        glm::vec3 head = t.from + d * (len * progress);
+        float streak = std::min(2.4f, len * progress); // never longer than traveled
+        if (streak < 0.05f) continue;
+        glm::vec3 tail = head - d * streak;
         float yawDeg = glm::degrees(std::atan2(d.x, -d.z));
         float pitchDeg = glm::degrees(std::asin(glm::clamp(d.y, -1.0f, 1.0f)));
-        float thick = 0.012f * (t.life / t.total) + 0.003f;
         glm::mat4 group =
-            vmCompose(glm::translate(glm::mat4(1.0f), (t.from + t.to) * 0.5f),
+            vmCompose(glm::translate(glm::mat4(1.0f), (head + tail) * 0.5f),
                       glm::vec3(0.0f), {pitchDeg, yawDeg, 0.0f});
-        obox(group, {0, 0, 0}, {0, 0, 0}, {thick, thick, len},
-             {1.0f, 0.92f, 0.62f}, 1.0f);
+        // Thick enough to survive projection: your own tracer runs nearly
+        // parallel to the view ray, so a thin box vanishes into subpixels.
+        obox(group, {0, 0, 0}, {0, 0, 0}, {0.045f, 0.045f, streak},
+             {1.0f, 0.90f, 0.55f}, 1.0f);
     }
 
     if (uiActive()) {
@@ -1829,14 +1911,16 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         frame.texts.push_back(std::move(speedo));
     }
 
-    TextDraw crosshair;
-    crosshair.centered = true;
-    crosshair.x = viewportW * 0.5f;
-    crosshair.y = viewportH * 0.5f - 7.0f;
-    crosshair.scale = 2.0f;
-    crosshair.color = glm::vec4(1.0f, 1.0f, 1.0f, 0.9f);
-    crosshair.text = "+";
-    frame.texts.push_back(std::move(crosshair));
+    // Crosshair: four thin drawn arms with a gap (not a font glyph).
+    {
+        const glm::vec4 chCol(1.0f, 1.0f, 1.0f, 0.85f);
+        const float chX = viewportW * 0.5f, chY = viewportH * 0.5f;
+        const float gap = 5.0f, arm = 7.0f, th = 2.0f;
+        frame.rects.push_back({chX - gap - arm, chY - th * 0.5f, arm, th, chCol});
+        frame.rects.push_back({chX + gap, chY - th * 0.5f, arm, th, chCol});
+        frame.rects.push_back({chX - th * 0.5f, chY - gap - arm, th, arm, chCol});
+        frame.rects.push_back({chX - th * 0.5f, chY + gap, th, arm, chCol});
+    }
 
     const float cx = viewportW * 0.5f;
     auto centeredLine = [&](float y, float scale, const glm::vec4& color, std::string text) {
@@ -1910,10 +1994,9 @@ void Game::appendHudDraws(RenderFrame& frame) const {
                 std::snprintf(state, sizeof(state), "  WINDING UP %s",
                               attackName(B.attack));
             }
-            std::snprintf(info, sizeof(info), "%s  %d/%d  STA %d%s",
+            std::snprintf(info, sizeof(info), "%s  %d/%d%s",
                           toUpperAscii(def ? def->displayName : e.defId).c_str(),
-                          int(std::ceil(e.health)), int(e.maxHealth),
-                          int(B.stamina), state);
+                          int(std::ceil(e.health)), int(e.maxHealth), state);
         } else {
             std::snprintf(info, sizeof(info), "%s  %d/%d",
                           toUpperAscii(def ? def->displayName : e.defId).c_str(),
@@ -1934,6 +2017,36 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         float a = float(glm::clamp(controlHintTimer_ / 1.5, 0.0, 1.0)); // fade out
         centeredLine(viewportH - 96.0f, 2.0f, glm::vec4(0.9f, 0.93f, 1.0f, a),
                      "WASD MOVE   E INTERACT   LMB ATTACK   RMB BLOCK   B SPAWN MENU   ESC MENU");
+    }
+
+    // Health bar, bottom-left: ghost bar (recent damage) trails behind the
+    // fill, the fill flashes white on the hit itself, and the color walks
+    // green -> amber -> red as it empties.
+    {
+        const float hw = 240.0f, hh = 14.0f;
+        const float hx = 24.0f, hy = viewportH - 46.0f;
+        frame.rects.push_back({hx - 3.0f, hy - 3.0f, hw + 6.0f, hh + 6.0f,
+                               glm::vec4(0.05f, 0.07f, 0.10f, 0.85f)});
+        float frac = playerHealth_ / 100.0f;
+        float shownFrac = glm::clamp(playerHealthShown_ / 100.0f, 0.0f, 1.0f);
+        if (shownFrac > frac) { // draining ghost
+            frame.rects.push_back({hx, hy, hw * shownFrac, hh,
+                                   glm::vec4(0.75f, 0.20f, 0.15f, 0.75f)});
+        }
+        glm::vec4 col = frac > 0.6f   ? glm::vec4(0.42f, 0.85f, 0.40f, 0.95f)
+                        : frac > 0.3f ? glm::vec4(0.95f, 0.75f, 0.25f, 0.95f)
+                                      : glm::vec4(0.92f, 0.25f, 0.18f, 0.95f);
+        if (sinceDamaged_ < 0.15f) col = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        frame.rects.push_back({hx, hy, hw * frac, hh, col});
+
+        std::snprintf(buf, sizeof(buf), "%d", int(std::ceil(playerHealth_)));
+        TextDraw hp;
+        hp.x = hx + hw + 12.0f;
+        hp.y = hy - 3.0f;
+        hp.scale = 2.5f;
+        hp.color = white;
+        hp.text = buf;
+        frame.texts.push_back(std::move(hp));
     }
 
     // Stamina bar: the melee resource. Only shown when a melee weapon is
@@ -2025,12 +2138,12 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
             case melee::Attack::Overhead:
                 return windup ? Key{{0.02f, 0.22f, 0.12f}, {52, 4, 6}}
                               : Key{{-0.02f, -0.16f, -0.30f}, {-58, -4, -8}};
-            case melee::Attack::Stab:
-                return windup ? Key{{0.05f, -0.03f, 0.17f}, {7, 5, 3}}
-                              : Key{{-0.05f, 0.02f, -0.36f}, {-5, -6, -2}};
+            case melee::Attack::Stab: // pull to the hip, then a deep thrust
+                return windup ? Key{{0.06f, -0.05f, 0.19f}, {8, 6, 4}}
+                              : Key{{-0.06f, 0.03f, -0.46f}, {-6, -7, -2}};
             case melee::Attack::Jab: // short pommel bash: a sharp forward pop
-                return windup ? Key{{0.03f, -0.01f, 0.09f}, {3, -8, -12}}
-                              : Key{{-0.04f, 0.02f, -0.22f}, {-4, 6, 16}};
+                return windup ? Key{{0.03f, -0.01f, 0.10f}, {3, -8, -12}}
+                              : Key{{-0.05f, 0.02f, -0.30f}, {-4, 6, 16}};
             case melee::Attack::Kick: // hands just dip while the boot flies
             default:
                 return windup ? Key{{0.04f, -0.09f, 0.05f}, {-9, 6, 8}}
@@ -2047,10 +2160,15 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
             aRot = w.r * e * heavyMul;
             break;
         }
-        case melee::Phase::Active:
-            aPos = glm::mix(w.p * heavyMul, st.p, p);
-            aRot = glm::mix(w.r * heavyMul, st.r, p);
+        case melee::Phase::Active: {
+            // Smoothstep, not linear: the blade accelerates out of the
+            // windup and decelerates into the strike point, which is what
+            // makes the swing read as a swing instead of a slide.
+            float sp = p * p * (3.0f - 2.0f * p);
+            aPos = glm::mix(w.p * heavyMul, st.p, sp);
+            aRot = glm::mix(w.r * heavyMul, st.r, sp);
             break;
+        }
         case melee::Phase::Recovery: {
             float e = (1.0f - p) * (1.0f - p);
             aPos = st.p * e;
@@ -2107,12 +2225,14 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
     };
 
     if (weapon == "glock") {
-        // Two-handed pistol held center-right; recoil kicks the muzzle up
-        // and the whole gun back, decaying with the flash.
+        // Two-handed pistol held center-right. Recoil: the muzzle snaps up
+        // hard on the shot and settles fast (quadratic decay), the gun
+        // drives straight back a touch, and a hint of roll sells the torque.
+        float snap = kick * kick;
         glm::mat4 gun = vmCompose(root,
                                   glm::vec3(0.15f, -0.145f, -0.38f)
-                                      + glm::vec3(0.0f, kick * 0.012f, kick * 0.05f),
-                                  {kick * 14.0f - 2.0f, -4.0f, -2.0f});
+                                      + glm::vec3(0.0f, snap * 0.014f, kick * 0.055f),
+                                  {snap * 17.0f - 2.0f, -4.0f, -2.0f - snap * 4.0f});
         // Slide, top rib, sights, frame.
         box(gun, {0.0f, 0.043f, -0.055f}, {0, 0, 0}, {0.05f, 0.052f, 0.245f}, metalDark);
         box(gun, {0.0f, 0.072f, -0.055f}, {0, 0, 0}, {0.036f, 0.012f, 0.245f}, metalMid);
@@ -2184,13 +2304,25 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
             box(sw, {-0.02f, -0.16f, 0.32f}, {52.0f, 10.0f, 0.0f}, {0.115f, 0.115f, 0.32f}, sleeve);
         }
     } else { // fists (and any unknown weapon id)
-        // Attack phases drive the right fist: slashes hook, the overhead is
-        // a hammer fist, the stab is a straight jab. Left stays in guard
-        // (or carries the shield when one is worn).
-        fistAndArm(glm::vec3(0.235f, -0.22f, -0.48f) + aPos,
-                   glm::vec3(8.0f, -10.0f, -6.0f) + aRot, false);
+        // Punches alternate hands: a left slash IS the left fist's swing
+        // (the SlashLeft keys pull to screen-left and drive across to the
+        // right - exactly a left hook), everything else stays on the right.
+        // One fist punching while the other holds guard reads like boxing;
+        // the old both-attacks-on-one-fist version read like a glitch.
+        bool inSwing = A.phase == melee::Phase::Windup ||
+                       A.phase == melee::Phase::Active ||
+                       A.phase == melee::Phase::Recovery;
+        bool leftPunch = inSwing && !hasShield_ &&
+                         A.attack == melee::Attack::SlashLeft;
+        glm::vec3 rOff = leftPunch ? glm::vec3(0.0f) : aPos;
+        glm::vec3 rRotOff = leftPunch ? glm::vec3(0.0f) : aRot;
+        fistAndArm(glm::vec3(0.235f, -0.22f, -0.48f) + rOff,
+                   glm::vec3(8.0f, -10.0f, -6.0f) + rRotOff, false);
         if (!hasShield_) {
-            fistAndArm({-0.24f, -0.24f, -0.50f}, {10.0f, 14.0f, 8.0f}, true);
+            glm::vec3 lOff = leftPunch ? aPos : glm::vec3(0.0f);
+            glm::vec3 lRotOff = leftPunch ? aRot : glm::vec3(0.0f);
+            fistAndArm(glm::vec3(-0.24f, -0.24f, -0.50f) + lOff,
+                       glm::vec3(10.0f, 14.0f, 8.0f) + lRotOff, true);
         }
     }
 
@@ -2224,9 +2356,10 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
         (A.phase == melee::Phase::Windup || A.phase == melee::Phase::Active ||
          A.phase == melee::Phase::Recovery)) {
         float p = melee::phaseProgress(A);
-        float ext = A.phase == melee::Phase::Windup   ? 0.25f * p
-                    : A.phase == melee::Phase::Active ? 0.25f + 0.75f * p
-                                                      : 1.0f - p;
+        float sp = p * p * (3.0f - 2.0f * p); // smooth extension, no linear pop
+        float ext = A.phase == melee::Phase::Windup   ? 0.25f * sp
+                    : A.phase == melee::Phase::Active ? 0.25f + 0.75f * sp
+                                                      : 1.0f - sp;
         glm::mat4 leg = vmCompose(root,
                                   {0.06f, -0.36f + 0.16f * ext, -0.28f - 0.44f * ext},
                                   {-72.0f + 48.0f * ext, 4.0f, 0.0f});

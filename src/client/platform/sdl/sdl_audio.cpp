@@ -3,7 +3,7 @@
 #include "shared/log.h"
 
 namespace {
-constexpr int kVoices = 8; // simultaneous one-shots; oldest requests just drop
+constexpr int kVoices = 16; // simultaneous one-shots; when full, steal a voice
 }
 
 bool SdlAudio::init() {
@@ -74,7 +74,15 @@ void SdlAudio::playSound(const std::string& name, float pitch) {
         }
         if (voice) streams_.push_back(voice);
     }
-    if (!voice) return; // all voices busy: drop the one-shot
+    if (!voice && !streams_.empty()) {
+        // Every voice is busy: steal one round-robin instead of dropping the
+        // new sound. A cut-off footstep tail is inaudible; a swallowed
+        // gunshot is a bug report.
+        voice = streams_[stealNext_ % streams_.size()];
+        ++stealNext_;
+        SDL_ClearAudioStream(voice);
+    }
+    if (!voice) return;
 
     SDL_SetAudioStreamFormat(voice, &sound.spec, nullptr);
     SDL_SetAudioStreamGain(voice, masterVolume_ * sfxVolume_);

@@ -28,6 +28,7 @@ private:
     bool initialized_ = false;
     SDL_AudioDeviceID device_ = 0;
     std::vector<SDL_AudioStream*> streams_; // fixed voice pool, bound to device_
+    size_t stealNext_ = 0; // round-robin voice steal when the pool is full
     std::unordered_map<std::string, Sound> sounds_;
     float masterVolume_ = 1.0f;
     float musicVolume_ = 1.0f;

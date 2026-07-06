@@ -199,6 +199,7 @@ private:
         glm::vec3 color{1.0f};
         float life = 0.0f; // counts down to 0
         float total = 0.3f;
+        float size = 1.0f; // draw-size multiplier (impact flashes are bigger)
     };
     std::vector<Spark> sparks_;
 
@@ -220,13 +221,22 @@ private:
     float shakeAmp_ = 0.0f;
     float damageFlash_ = 0.0f;  // red vignette after the player is struck
 
-    // Bullet tracers (Glock): a bright line from muzzle to impact, gone in
-    // a few hundredths of a second - shots visibly travel somewhere.
+    // Player health (bot strikes deal real damage now; going down respawns
+    // you). healthShown_ trails health_ so the bar visibly drains.
+    float playerHealth_ = 100.0f;
+    float playerHealthShown_ = 100.0f;
+    float sinceDamaged_ = 999.0f; // seconds since the last hit (regen gate + bar flash)
+    void damagePlayer(float amount);
+
+    // Bullet tracers (Glock): a short bright streak that travels from the
+    // muzzle to the impact point at a visible (not instant) speed, then
+    // pops an impact puff where it lands.
     struct Tracer {
         glm::vec3 from{0.0f};
         glm::vec3 to{0.0f};
-        float life = 0.0f;
-        float total = 0.06f;
+        float life = 0.0f;   // counts down; 0 = arrived
+        float total = 0.06f; // travel time = distance / tracer speed
+        bool impact = false; // ends on a surface: puff on arrival
     };
     std::vector<Tracer> tracers_;
 

@@ -8,6 +8,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <cstdio>
+
 namespace {
 
 const char* kWorldVS = R"GLSL(
@@ -278,7 +280,59 @@ void GLRenderer::render(const RenderFrame& frame) {
     drawRects(frame);
     drawTexts(frame);
 
+    if (!shotPath_.empty()) writePendingScreenshot(frame.viewportW, frame.viewportH);
+
     window_->present();
+}
+
+// Reads the finished backbuffer and writes a bottom-up 24-bit BMP (the one
+// image format writable in a few lines with no dependencies). Dev/testing
+// only - lets an automated run verify what the game actually drew.
+void GLRenderer::writePendingScreenshot(int w, int h) {
+    std::string path = std::move(shotPath_);
+    shotPath_.clear();
+    if (w <= 0 || h <= 0) return;
+
+    std::vector<unsigned char> rgba(size_t(w) * size_t(h) * 4);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+
+    const int rowBytes = (w * 3 + 3) & ~3; // BMP rows pad to 4 bytes
+    std::vector<unsigned char> row(size_t(rowBytes), 0);
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) {
+        eng::logError("Screenshot: cannot write %s", path.c_str());
+        return;
+    }
+    unsigned int imgBytes = unsigned(rowBytes) * unsigned(h);
+    unsigned int fileBytes = 54 + imgBytes;
+    unsigned char header[54] = {'B', 'M'};
+    auto put32 = [&header](int at, unsigned int v) {
+        header[at] = (unsigned char)(v);
+        header[at + 1] = (unsigned char)(v >> 8);
+        header[at + 2] = (unsigned char)(v >> 16);
+        header[at + 3] = (unsigned char)(v >> 24);
+    };
+    put32(2, fileBytes);
+    put32(10, 54);      // pixel data offset
+    put32(14, 40);      // BITMAPINFOHEADER
+    put32(18, unsigned(w));
+    put32(22, unsigned(h)); // positive = bottom-up, matching glReadPixels
+    header[26] = 1;         // planes
+    header[28] = 24;        // bpp
+    put32(34, imgBytes);
+    std::fwrite(header, 1, sizeof(header), f);
+    for (int y = 0; y < h; ++y) { // glReadPixels row 0 = bottom: write as-is
+        const unsigned char* src = rgba.data() + size_t(y) * size_t(w) * 4;
+        for (int x = 0; x < w; ++x) { // RGBA -> BGR
+            row[size_t(x) * 3 + 0] = src[size_t(x) * 4 + 2];
+            row[size_t(x) * 3 + 1] = src[size_t(x) * 4 + 1];
+            row[size_t(x) * 3 + 2] = src[size_t(x) * 4 + 0];
+        }
+        std::fwrite(row.data(), 1, size_t(rowBytes), f);
+    }
+    std::fclose(f);
+    eng::logInfo("Screenshot written: %s (%dx%d)", path.c_str(), w, h);
 }
 
 // Vertical gradient behind the world: deeper blue overhead easing into the
