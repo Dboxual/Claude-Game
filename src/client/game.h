@@ -8,6 +8,7 @@
 #include "shared/config.h"
 #include "shared/content.h"
 #include "shared/crafting.h"
+#include "shared/game_mode.h"
 #include "shared/inventory.h"
 #include "shared/items.h"
 #include "shared/melee.h"
@@ -25,12 +26,15 @@
 // RenderFrame. Contains no windowing, graphics-API, or OS calls - that is
 // what keeps the client portable and the dedicated server free of UI code.
 //
-// UI flow:
-//   MainMenu -> Singleplayer -> test world | Create World | Load World
-//            -> Multiplayer  -> (networking placeholder)
-//            -> Settings     -> back to wherever it was opened from
+// UI flow (game-hub shell - "game modes are the games inside the game"):
+//   MainMenu -> Play    -> Game Modes -> MiniCS / Deathmatch / Sandbox / ...
+//                       -> Servers    -> Server List | Direct Connect | Host
+//                       -> Recent Games
+//            -> Create  -> Create Map | Edit Map | Skins | Publish
+//            -> Profile
+//            -> Settings -> back to wherever it was opened from
 //   gameplay -> ESC -> PauseMain -> Resume | Settings | Quit to Menu
-//   gameplay -> Q   -> SpawnMenu (dev/admin: spawn pickups/bots/props)
+//   gameplay -> B   -> SpawnMenu (build/spawn tools; a Sandbox feature)
 class Game {
 public:
     // audio may be null (headless tests); sounds become no-ops.
@@ -42,7 +46,7 @@ public:
     // input, quit ends the loop, dirty settings get re-applied.
     bool uiActive() const { return ui_ != UiScreen::None; }
     bool wantsTextInput() const {
-        return ui_ == UiScreen::Multiplayer || ui_ == UiScreen::CreateWorld;
+        return ui_ == UiScreen::DirectConnect || ui_ == UiScreen::CreateWorld;
     }
     bool quitRequested() const { return quitRequested_; }
     const GameSettings& settings() const { return settings_; }
@@ -58,34 +62,53 @@ public:
         startTestWorld();
         if (content_.findWeapon(weaponId)) inventory_.acquireAndEquip(weaponId);
     }
+    // --mode <id>: boot straight into a game mode (dev/testing + screenshots).
+    void startInMode(const std::string& modeId) {
+        if (const GameMode* m = gamemodes::find(modeId)) startGameMode(*m);
+        else startTestWorld();
+    }
+    // --menu <screen>: boot onto a specific menu screen (dev/screenshots only).
+    void debugOpenScreen(const std::string& name);
 
     // Purely informational (shown on the debug HUD).
     void setRendererName(std::string name) { rendererName_ = std::move(name); }
 
 private:
     enum class UiScreen {
-        None, MainMenu, Singleplayer, Multiplayer, Settings, PauseMain,
-        CreateWorld, LoadWorld, SpawnMenu, Inventory,
+        None, MainMenu, Play, GameModes, Servers, ServerList, DirectConnect,
+        RecentGames, Create, CreateWorld, LoadWorld, Skins, Publish, Profile,
+        Settings, PauseMain, SpawnMenu, Inventory,
     };
 
     struct UiButton {
         enum class Id {
             // main menu
-            OpenSingleplayer, OpenMultiplayer, OpenSettings, QuitApp,
-            // singleplayer screen
-            StartTestWorld, OpenCreateWorld, OpenLoadWorld, BackToMain,
-            // create/load world screens
-            ConfirmCreateWorld, LoadWorldEntry, BackToSingleplayer, SelectWorldType,
-            // multiplayer screen (direct connect only until networking lands)
+            OpenPlay, OpenCreate, OpenProfile, OpenSettings, QuitApp,
+            // play submenu
+            OpenGameModes, OpenServers, OpenRecentGames,
+            // game modes list (payload = index into gamemodes::all())
+            SelectGameMode,
+            // servers submenu
+            OpenServerList, OpenDirectConnect, HostLocalServer,
             Connect, QuickLocalhost,
+            // recent games
+            QuickLaunchRecent,
+            // create submenu
+            OpenCreateMap, OpenEditMap, OpenSkins, OpenPublish,
+            // create/edit map screens
+            ConfirmCreateWorld, LoadWorldEntry, SelectWorldType,
+            // skins placeholder
+            SelectSkinColor,
+            // navigation (pops one level, mirrors ESC)
+            NavBack,
             // pause menu
             Resume, QuitToMenu,
-            // dev spawn menu
+            // dev spawn / build menu
             SelectSpawnCategory, SpawnEntity, CloseSpawnMenu,
             // inventory / crafting screen
             InvEquipItem, CraftRecipe, CloseInventory,
             // settings screen
-            Back, ResetDefaults,
+            ResetDefaults,
             SensDown, SensUp, FovDown, FovUp,
             MasterDown, MasterUp, MusicDown, MusicUp, SfxDown, SfxUp,
             ToggleFullscreen, ToggleVsync, ToggleHud,
@@ -107,6 +130,8 @@ private:
     bool loadSettings(); // returns whether a settings file existed
     void saveSettings();
     void startTestWorld();
+    void startGameMode(const GameMode& mode); // build mode's map + loadout, play
+    void goBack();       // pop one UI level (shared by ESC and Back buttons)
     void beginSession(); // respawn + reset timers/inventory, drop into gameplay
     void createWorld();
     void loadWorld(int listIndex);
@@ -290,6 +315,15 @@ private:
     double fpsSmoothed_ = 0.0;
     bool walkHeldHud_ = false;
     std::string rendererName_ = "unknown";
+
+    // Active game mode (a mode is "a game inside the game": ruleset + map +
+    // loadout). Set by startGameMode; currentModeName_ shows on the HUD/pause,
+    // sandboxMode_ gates the build/spawn tools onto the Sandbox path only.
+    std::string currentModeName_;
+    ModeStatus activeModeStatus_ = ModeStatus::Playable;
+    bool sandboxMode_ = false;
+    std::string lastModeId_; // Recent Games quick-launch (last mode played)
+    int skinColorIndex_ = 0; // Skins screen placeholder selection
 
     // UI state.
     bool inGame_ = false; // a world session is active behind the UI

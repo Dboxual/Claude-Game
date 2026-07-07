@@ -1,17 +1,23 @@
-# TacMove — Tactical FPS Movement Prototype (Milestone 1)
+# TacMove — Cross-Platform Game Hub
 
-A from-scratch C++20 engine prototype focused on tactical-FPS movement feel.
+A from-scratch C++20 game built on a hand-rolled tactical-FPS movement core.
 No game engine — just **SDL3** (window/input), **OpenGL 3.3 core** (rendering,
 via a hand-rolled loader on top of `SDL_GL_GetProcAddress`), **GLM** (math),
 **CMake** + **vcpkg** (build/dependencies).
 
-This build is the **early sandbox foundation (M3, community-server
-direction)**: on top of the movement prototype you can create and load local
-worlds, spawn objects from a categorized dev menu, pick up and use weapons
-(fists / karambit / Glock / sword), carry light props, and fight a
-respawning training dummy — with **3D first-person viewmodels** (animated
-hands + held weapon rendered in perspective, not flat sprites), a full set
-of original synthesized sounds (see
+**The identity: a cross-platform game hub where "Game Modes" are the games
+inside the game.** From the main menu you **Play** a game mode (**MiniCS**,
+Deathmatch, Sandbox, Zombies, Parkour, Social Hub), **Create** maps and skins,
+and manage a **Profile** and **Settings**. MiniCS is the first flagship
+playable FPS loop (pistol, cover, bot opponents on a compact arena). Maps live
+*inside* modes; skins are cosmetic; servers are where people will connect once
+networking lands. See [HANDOFF.md](HANDOFF.md) for the current status.
+
+Under the hood it is still the movement prototype plus a full sandbox: create
+and load local worlds/maps, spawn objects from a categorized build menu, pick
+up and use weapons (fists / karambit / Glock / sword), carry props, gather and
+craft, and fight bots — with **3D first-person viewmodels**, a set of original
+synthesized sounds (see
 [server/content/sounds/CREDITS.md](server/content/sounds/CREDITS.md)), and
 weapon & entity definitions loaded from data files under `server/content/`.
 Real multiplayer, content packs, and plugins are later phases — what an
@@ -119,14 +125,26 @@ see [PORTING.md](PORTING.md)).
 
 ## Main menu, pause menu & settings
 
-The client boots to a **main menu** (over a slow orbit of the arena):
-**Singleplayer** (Start Test World — a furnished arena with a weapon rack,
-training corner, and props; Create World; Load World), **Multiplayer**
-(one honest screen: a direct-connect address box that reports the
-connection system is a later milestone — the server-browser shell returns
-when real discovery exists; see [ONLINE_SERVERS.md](ONLINE_SERVERS.md) for
-what that takes), **Settings**, and **Quit**. Every button press plays a
-small original UI click.
+The client boots to a **main menu** (over a slow orbit of the arena) with the
+game-hub layout:
+
+- **Play** → **Game Modes** (MiniCS, Deathmatch, Sandbox, Zombies, Parkour,
+  Social Hub — each card shows a `PLAYABLE`/`EARLY` badge and its tagline);
+  **Servers** (Server List, Direct Connect, Host Local Server — honest
+  placeholders until networking lands); **Recent Games** (quick-launch the
+  last mode you played).
+- **Create** → **Create Map**, **Edit Map**, **Skins**, **Publish** (maps and
+  skins are what players make; game modes are built in).
+- **Profile**, **Settings**, **Quit**.
+
+A **game mode** is a game inside the game: a ruleset + a default map + a
+starting loadout. Selecting one builds its map, applies its loadout, and drops
+you in. Playable modes are a complete local loop; Early modes still drop you
+into a real, working world but say honestly what part of the ruleset (scoring,
+waves, online) is not built yet. Networking is a later milestone — the Servers
+screen never fakes a connection (see
+[ONLINE_SERVERS.md](ONLINE_SERVERS.md)). Every button press plays a small
+original UI click.
 
 In game, Esc pauses: the simulation freezes, the mouse unlocks, and the pause
 menu offers **Resume / Settings / Quit to Menu**. The settings screen is

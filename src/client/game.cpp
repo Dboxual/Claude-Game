@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -18,6 +19,8 @@ namespace {
 constexpr float kBtnW = 300.0f;
 constexpr float kBtnH = 48.0f;
 constexpr float kBtnGap = 62.0f;
+constexpr float kModeCardW = 540.0f; // Game Modes: wide "card" buttons
+constexpr float kModeCardH = 60.0f;
 constexpr float kRowH = 48.0f;
 constexpr float kStepBtn = 36.0f; // size of the square -/+ buttons
 constexpr float kAddressBoxW = 460.0f;
@@ -278,8 +281,129 @@ void Game::startTestWorld() {
     place("drop_stone", {0.6f, 0.0f, 4.4f}, 0.0f);
 
     currentWorldFile_.clear(); // the test glade is never saved
-    currentWorldName_ = "TEST GLADE";
+    currentWorldName_ = "SANDBOX";
+    currentWorldType_ = gamemodes::kTestGladeMap;
+    currentModeName_ = "SANDBOX";
+    activeModeStatus_ = ModeStatus::Playable;
+    sandboxMode_ = true; // the glade is the Sandbox mode: build tools belong here
+    lastModeId_ = "sandbox";
     beginSession();
+}
+
+// Launch a game mode: build its map (a world template, or the glade), place
+// its starting entities, then apply the loadout on top of the fresh session.
+// Preview modes still drop you into a real world; they just say honestly what
+// part of the ruleset is not built yet.
+void Game::startGameMode(const GameMode& mode) {
+    lastModeId_ = mode.id;
+
+    if (mode.mapTemplateId == gamemodes::kTestGladeMap) {
+        startTestWorld(); // builds the glade + beginSession (+ sandbox fields)
+    } else {
+        const WorldTemplate* tmpl = worldgen::findTemplate(mode.mapTemplateId);
+        if (!tmpl) {
+            eng::logError("Game mode '%s': unknown map '%s', using fallback",
+                          mode.id.c_str(), mode.mapTemplateId.c_str());
+            tmpl = &worldgen::fallbackTemplate();
+        }
+        world_.buildFromTemplate(*tmpl);
+        for (const WorldTemplate::Placement& p : tmpl->placements) {
+            if (const EntityDef* def = content_.find(p.defId)) {
+                world_.addEntity(*def, p.pos, p.respawnSeconds);
+            }
+        }
+        currentWorldFile_.clear(); // mode sessions are not saved as maps
+        currentWorldName_ = toUpperAscii(mode.displayName);
+        currentWorldType_ = tmpl->id;
+        sandboxMode_ = false;
+        beginSession();
+    }
+
+    // Loadout goes on after beginSession() (which resets to fists).
+    if (!mode.loadoutWeapon.empty() && content_.findWeapon(mode.loadoutWeapon)) {
+        inventory_.acquireAndEquip(mode.loadoutWeapon);
+    }
+
+    currentModeName_ = toUpperAscii(mode.displayName);
+    activeModeStatus_ = mode.status;
+    eng::logInfo("Started game mode '%s' on map '%s'", mode.id.c_str(),
+                 mode.mapTemplateId.c_str());
+    if (mode.status == ModeStatus::Preview && !mode.previewNote.empty()) {
+        showToast(mode.previewNote); // honest "what's not done yet"
+    }
+}
+
+// Pop one level up the UI tree. Shared by ESC and every Back button so there
+// is a single definition of "where does back go from here".
+void Game::goBack() {
+    switch (ui_) {
+    case UiScreen::None: // gameplay -> pause
+        ui_ = UiScreen::PauseMain;
+        jumpBufferTimer_ = -1.0; // stale presses should not fire on resume
+        break;
+    case UiScreen::PauseMain: // pause -> resume
+        ui_ = UiScreen::None;
+        break;
+    case UiScreen::Settings: // back to wherever settings was opened from
+        saveSettings();
+        ui_ = settingsReturn_;
+        break;
+    case UiScreen::Play:
+    case UiScreen::Create:
+    case UiScreen::Profile: // top-level submenu -> main menu
+        menuStatus_.clear();
+        ui_ = UiScreen::MainMenu;
+        break;
+    case UiScreen::GameModes:
+    case UiScreen::Servers:
+    case UiScreen::RecentGames: // -> Play
+        menuStatus_.clear();
+        ui_ = UiScreen::Play;
+        break;
+    case UiScreen::ServerList:
+    case UiScreen::DirectConnect: // -> Servers
+        menuStatus_.clear();
+        ui_ = UiScreen::Servers;
+        break;
+    case UiScreen::CreateWorld:
+    case UiScreen::LoadWorld:
+    case UiScreen::Skins:
+    case UiScreen::Publish: // -> Create
+        menuStatus_.clear();
+        ui_ = UiScreen::Create;
+        break;
+    case UiScreen::SpawnMenu: // close, back to gameplay
+    case UiScreen::Inventory:
+        menuStatus_.clear();
+        ui_ = UiScreen::None;
+        break;
+    case UiScreen::MainMenu:
+        break;
+    }
+}
+
+void Game::debugOpenScreen(const std::string& name) {
+    // Dev/screenshot helper: jump onto a menu screen so an automated run can
+    // capture it (there is no click-through path in --frames mode).
+    struct Entry { const char* key; UiScreen screen; };
+    static const Entry kScreens[] = {
+        {"play", UiScreen::Play},          {"gamemodes", UiScreen::GameModes},
+        {"servers", UiScreen::Servers},    {"serverlist", UiScreen::ServerList},
+        {"directconnect", UiScreen::DirectConnect},
+        {"recent", UiScreen::RecentGames}, {"create", UiScreen::Create},
+        {"createmap", UiScreen::CreateWorld}, {"editmap", UiScreen::LoadWorld},
+        {"skins", UiScreen::Skins},        {"publish", UiScreen::Publish},
+        {"profile", UiScreen::Profile},    {"settings", UiScreen::Settings},
+    };
+    for (const Entry& e : kScreens) {
+        if (name == e.key) {
+            if (e.screen == UiScreen::CreateWorld) worldNameInput_.clear();
+            if (e.screen == UiScreen::LoadWorld) refreshWorldList();
+            ui_ = e.screen;
+            return;
+        }
+    }
+    eng::logError("--menu: unknown screen '%s'", name.c_str());
 }
 
 void Game::createWorld() {
@@ -1325,38 +1449,7 @@ void Game::triggerShake(float amplitude, float seconds) {
 void Game::update(const InputState& in, double frameDt, int viewportW, int viewportH) {
     menuTime_ += frameDt;
 
-    if (in.escapePressed) {
-        switch (ui_) {
-        case UiScreen::None: // gameplay -> pause
-            ui_ = UiScreen::PauseMain;
-            jumpBufferTimer_ = -1.0; // stale presses should not fire on resume
-            break;
-        case UiScreen::PauseMain: // pause -> resume
-            ui_ = UiScreen::None;
-            break;
-        case UiScreen::Settings: // back to wherever settings was opened from
-            saveSettings();
-            ui_ = settingsReturn_;
-            break;
-        case UiScreen::Singleplayer:
-        case UiScreen::Multiplayer: // back to the main menu
-            menuStatus_.clear();
-            ui_ = UiScreen::MainMenu;
-            break;
-        case UiScreen::CreateWorld:
-        case UiScreen::LoadWorld: // back to the singleplayer screen
-            menuStatus_.clear();
-            ui_ = UiScreen::Singleplayer;
-            break;
-        case UiScreen::SpawnMenu: // close, back to gameplay
-        case UiScreen::Inventory:
-            menuStatus_.clear();
-            ui_ = UiScreen::None;
-            break;
-        case UiScreen::MainMenu:
-            break;
-        }
-    }
+    if (in.escapePressed) goBack();
 
     // B toggles the dev spawn menu, but only in a gameplay context (never
     // while typing in a text field or sitting in the pause/main menus).
@@ -1404,8 +1497,8 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     }
 
     if (uiActive()) {
-        // Server-address text entry (only the multiplayer screen has a field).
-        if (ui_ == UiScreen::Multiplayer) {
+        // Server-address text entry (only the direct-connect screen has a field).
+        if (ui_ == UiScreen::DirectConnect) {
             for (char c : in.typedText) {
                 if (c >= 32 && c < 127 && serverAddress_.size() < kAddressMaxLen) {
                     serverAddress_ += c;
@@ -1558,8 +1651,8 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
                 Spark flash;
                 flash.pos = at;
                 flash.color = {1.0f, 0.95f, 0.75f};
-                flash.life = flash.total = 0.07f;
-                flash.size = 5.0f;
+                flash.life = flash.total = 0.05f;
+                flash.size = 3.0f; // tighter puff: less of a screen-filling blob
                 sparks_.push_back(flash);
             }
             tracers_.erase(tracers_.begin() + long(i));
@@ -1603,38 +1696,80 @@ void Game::activateButton(UiButton::Id id, int payload) {
     bool settingsChanged = false;
     switch (id) {
     // Navigation.
-    case Id::OpenSingleplayer: ui_ = UiScreen::Singleplayer; menuStatus_.clear(); break;
-    case Id::OpenMultiplayer: ui_ = UiScreen::Multiplayer; menuStatus_.clear(); break;
+    case Id::OpenPlay: ui_ = UiScreen::Play; menuStatus_.clear(); break;
+    case Id::OpenCreate: ui_ = UiScreen::Create; menuStatus_.clear(); break;
+    case Id::OpenProfile: ui_ = UiScreen::Profile; menuStatus_.clear(); break;
     case Id::OpenSettings: settingsReturn_ = ui_; ui_ = UiScreen::Settings; break;
-    case Id::BackToMain: ui_ = UiScreen::MainMenu; menuStatus_.clear(); break;
-    case Id::BackToSingleplayer: ui_ = UiScreen::Singleplayer; menuStatus_.clear(); break;
-    case Id::Back: saveSettings(); ui_ = settingsReturn_; break;
+    case Id::NavBack: goBack(); break;
     case Id::QuitApp: quitRequested_ = true; break;
 
-    // Singleplayer.
-    case Id::StartTestWorld: startTestWorld(); break;
-    case Id::OpenCreateWorld:
-        worldNameInput_.clear();
-        createTemplateIndex_ = 0; // default to flat_sandbox
+    // Play submenu.
+    case Id::OpenGameModes: ui_ = UiScreen::GameModes; menuStatus_.clear(); break;
+    case Id::OpenServers: ui_ = UiScreen::Servers; menuStatus_.clear(); break;
+    case Id::OpenRecentGames: ui_ = UiScreen::RecentGames; menuStatus_.clear(); break;
+
+    // Game modes: a mode is a game inside the game (map + ruleset + loadout).
+    case Id::SelectGameMode: {
+        const std::vector<GameMode>& modes = gamemodes::all();
+        if (payload >= 0 && payload < int(modes.size())) {
+            startGameMode(modes[size_t(payload)]);
+        }
+        break;
+    }
+    case Id::QuickLaunchRecent: {
+        if (const GameMode* m = gamemodes::find(lastModeId_)) startGameMode(*m);
+        break;
+    }
+
+    // Servers submenu. Real discovery/hosting arrives with the networking
+    // milestone (protocol.h reserves v1); these are honest until it does.
+    case Id::OpenServerList:
         menuStatus_.clear();
-        ui_ = UiScreen::CreateWorld;
+        ui_ = UiScreen::ServerList;
         break;
-    case Id::OpenLoadWorld:
-        refreshWorldList();
-        menuStatus_ = worldList_.empty() ? "NO WORLDS YET - CREATE ONE FIRST" : "";
-        ui_ = UiScreen::LoadWorld;
+    case Id::OpenDirectConnect:
+        menuStatus_.clear();
+        ui_ = UiScreen::DirectConnect;
         break;
-
-    // Create/load world screens.
-    case Id::SelectWorldType: createTemplateIndex_ = payload; break;
-    case Id::ConfirmCreateWorld: createWorld(); break;
-    case Id::LoadWorldEntry: loadWorld(payload); break;
-
-    // Multiplayer (networking is a later milestone; protocol.h reserves v1).
+    case Id::HostLocalServer:
+        menuStatus_ = "HOSTING NEEDS THE NETWORKING MILESTONE - PLAY GAME MODES LOCALLY FOR NOW";
+        break;
     case Id::Connect:
     case Id::QuickLocalhost:
         if (id == Id::QuickLocalhost) serverAddress_ = "127.0.0.1:27015";
         menuStatus_ = "CONNECTION SYSTEM NOT IMPLEMENTED YET - NETWORKING IS A LATER MILESTONE";
+        break;
+
+    // Create submenu: maps and skins players make (Publish comes with online).
+    case Id::OpenCreateMap:
+        worldNameInput_.clear();
+        createTemplateIndex_ = 0; // default to the first base map
+        menuStatus_.clear();
+        ui_ = UiScreen::CreateWorld;
+        break;
+    case Id::OpenEditMap:
+        refreshWorldList();
+        menuStatus_ = worldList_.empty() ? "NO SAVED MAPS YET - CREATE ONE FIRST" : "";
+        ui_ = UiScreen::LoadWorld;
+        break;
+    case Id::OpenSkins:
+        menuStatus_.clear();
+        ui_ = UiScreen::Skins;
+        break;
+    case Id::OpenPublish:
+        menuStatus_ = "PUBLISHING ARRIVES WITH ONLINE PLAY - MAPS AND SKINS SAVE LOCALLY FOR NOW";
+        ui_ = UiScreen::Publish;
+        break;
+
+    // Create/edit map screens.
+    case Id::SelectWorldType: createTemplateIndex_ = payload; break;
+    case Id::ConfirmCreateWorld: createWorld(); break;
+    case Id::LoadWorldEntry: loadWorld(payload); break;
+
+    // Skins placeholder: pick a highlight color (saved with settings later).
+    case Id::SelectSkinColor:
+        skinColorIndex_ = payload;
+        menuStatus_ = "SKIN PREVIEW ONLY - FULL SKIN SYSTEM IS COMING";
         break;
 
     // Pause menu.
@@ -1734,20 +1869,98 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
 
     switch (ui_) {
     case UiScreen::MainMenu:
-        column(viewportH * 0.38f, {
-            {Id::OpenSingleplayer, 0, 0, 0, 0, "SINGLEPLAYER", true},
-            {Id::OpenMultiplayer, 0, 0, 0, 0, "MULTIPLAYER", true},
+        column(viewportH * 0.36f, {
+            {Id::OpenPlay, 0, 0, 0, 0, "PLAY", true},
+            {Id::OpenCreate, 0, 0, 0, 0, "CREATE", true},
+            {Id::OpenProfile, 0, 0, 0, 0, "PROFILE", true},
             {Id::OpenSettings, 0, 0, 0, 0, "SETTINGS", true},
             {Id::QuitApp, 0, 0, 0, 0, "QUIT", true},
         });
         break;
 
-    case UiScreen::Singleplayer:
-        column(viewportH * 0.38f, {
-            {Id::StartTestWorld, 0, 0, 0, 0, "START TEST WORLD", true},
-            {Id::OpenCreateWorld, 0, 0, 0, 0, "CREATE WORLD", true},
-            {Id::OpenLoadWorld, 0, 0, 0, 0, "LOAD WORLD", true},
-            {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
+    case UiScreen::Play:
+        column(viewportH * 0.40f, {
+            {Id::OpenGameModes, 0, 0, 0, 0, "GAME MODES", true},
+            {Id::OpenServers, 0, 0, 0, 0, "SERVERS", true},
+            {Id::OpenRecentGames, 0, 0, 0, 0, "RECENT GAMES", true},
+            {Id::NavBack, 0, 0, 0, 0, "BACK", true},
+        });
+        break;
+
+    case UiScreen::GameModes: {
+        // One wide card per mode; the tagline + status badge are drawn over
+        // each rect in appendMenuDraws (same layout, keyed by index).
+        const std::vector<GameMode>& modes = gamemodes::all();
+        const float mW = kModeCardW, mH = kModeCardH, mGap = kModeCardH + 14.0f;
+        float y = viewportH * 0.26f;
+        for (int i = 0; i < int(modes.size()); ++i) {
+            buttons.push_back({Id::SelectGameMode, cx - mW / 2, y, mW, mH,
+                               toUpperAscii(modes[size_t(i)].displayName), true, i});
+            y += mGap;
+        }
+        y += 8.0f;
+        buttons.push_back({Id::NavBack, cx - kBtnW / 2, y, kBtnW, kBtnH, "BACK", true});
+        break;
+    }
+
+    case UiScreen::Servers:
+        column(viewportH * 0.40f, {
+            {Id::OpenServerList, 0, 0, 0, 0, "SERVER LIST", true},
+            {Id::OpenDirectConnect, 0, 0, 0, 0, "DIRECT CONNECT", true},
+            {Id::HostLocalServer, 0, 0, 0, 0, "HOST LOCAL SERVER", true},
+            {Id::NavBack, 0, 0, 0, 0, "BACK", true},
+        });
+        break;
+
+    case UiScreen::ServerList:
+        // No live discovery yet: the screen is an honest empty list + Back.
+        column(viewportH * 0.66f, {
+            {Id::NavBack, 0, 0, 0, 0, "BACK", true},
+        });
+        break;
+
+    case UiScreen::RecentGames: {
+        float y = viewportH * 0.42f;
+        const GameMode* recent = gamemodes::find(lastModeId_);
+        if (recent) {
+            buttons.push_back({Id::QuickLaunchRecent, cx - kBtnW / 2, y, kBtnW, kBtnH,
+                               "PLAY " + toUpperAscii(recent->displayName), true});
+            y += kBtnGap;
+        }
+        buttons.push_back({Id::NavBack, cx - kBtnW / 2, y, kBtnW, kBtnH, "BACK", true});
+        break;
+    }
+
+    case UiScreen::Create:
+        column(viewportH * 0.36f, {
+            {Id::OpenCreateMap, 0, 0, 0, 0, "CREATE MAP", true},
+            {Id::OpenEditMap, 0, 0, 0, 0, "EDIT MAP", true},
+            {Id::OpenSkins, 0, 0, 0, 0, "SKINS", true},
+            {Id::OpenPublish, 0, 0, 0, 0, "PUBLISH", true},
+            {Id::NavBack, 0, 0, 0, 0, "BACK", true},
+        });
+        break;
+
+    case UiScreen::Skins: {
+        // A row of highlight-color swatches (placeholder for the skin system).
+        const int n = 6;
+        const float sw = 92.0f, sh = 60.0f, sgap = 12.0f;
+        float sx = cx - (n * sw + (n - 1) * sgap) / 2.0f;
+        const float sy = viewportH * 0.40f;
+        for (int i = 0; i < n; ++i) {
+            buttons.push_back({Id::SelectSkinColor, sx, sy, sw, sh, "",
+                               true, i, i == skinColorIndex_});
+            sx += sw + sgap;
+        }
+        buttons.push_back({Id::NavBack, cx - kBtnW / 2, viewportH * 0.66f,
+                           kBtnW, kBtnH, "BACK", true});
+        break;
+    }
+
+    case UiScreen::Publish:
+    case UiScreen::Profile:
+        column(viewportH * 0.66f, {
+            {Id::NavBack, 0, 0, 0, 0, "BACK", true},
         });
         break;
 
@@ -1770,7 +1983,7 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         }
         column(viewportH * 0.58f, {
             {Id::ConfirmCreateWorld, 0, 0, 0, 0, "CREATE", true},
-            {Id::BackToSingleplayer, 0, 0, 0, 0, "BACK", true},
+            {Id::NavBack, 0, 0, 0, 0, "BACK", true},
         });
         break;
     }
@@ -1784,7 +1997,7 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
             y += kBtnGap;
         }
         y += 18.0f;
-        buttons.push_back({Id::BackToSingleplayer, cx - kBtnW / 2, y, kBtnW, kBtnH,
+        buttons.push_back({Id::NavBack, cx - kBtnW / 2, y, kBtnW, kBtnH,
                            "BACK", true});
         break;
     }
@@ -1860,14 +2073,13 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         break;
     }
 
-    case UiScreen::Multiplayer:
+    case UiScreen::DirectConnect:
         // One honest screen: a direct-connect address box and nothing that
-        // pretends. The server-browser shell (tabs for online/LAN/favorites)
-        // comes back when there is real discovery to put in it.
+        // pretends. Reached from Play -> Servers -> Direct Connect.
         column(viewportH * 0.44f, {
             {Id::Connect, 0, 0, 0, 0, "CONNECT", true},
             {Id::QuickLocalhost, 0, 0, 0, 0, "LOCALHOST 127.0.0.1", true},
-            {Id::BackToMain, 0, 0, 0, 0, "BACK", true},
+            {Id::NavBack, 0, 0, 0, 0, "BACK", true},
         });
         break;
 
@@ -1908,7 +2120,7 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         buttons.push_back({Id::ResetDefaults, cx - kBtnW / 2, y, kBtnW, kBtnH,
                            "RESET TO DEFAULTS", true});
         y += kBtnGap;
-        buttons.push_back({Id::Back, cx - kBtnW / 2, y, kBtnW, kBtnH, "BACK", true});
+        buttons.push_back({Id::NavBack, cx - kBtnW / 2, y, kBtnW, kBtnH, "BACK", true});
         break;
     }
 
@@ -2159,7 +2371,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         glm::vec3 d = seg / len;
         float progress = glm::clamp(1.0f - t.life / t.total, 0.0f, 1.0f);
         glm::vec3 head = t.from + d * (len * progress);
-        float streak = std::min(2.4f, len * progress); // never longer than traveled
+        float streak = std::min(3.6f, len * progress); // never longer than traveled
         if (streak < 0.05f) continue;
         glm::vec3 tail = head - d * streak;
         float yawDeg = glm::degrees(std::atan2(d.x, -d.z));
@@ -2167,10 +2379,14 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         glm::mat4 group =
             vmCompose(glm::translate(glm::mat4(1.0f), (head + tail) * 0.5f),
                       glm::vec3(0.0f), {pitchDeg, yawDeg, 0.0f});
-        // Thick enough to survive projection: your own tracer runs nearly
-        // parallel to the view ray, so a thin box vanishes into subpixels.
-        obox(group, {0, 0, 0}, {0, 0, 0}, {0.045f, 0.045f, streak},
-             {1.0f, 0.90f, 0.55f}, 1.0f);
+        // A slim, long streak: thin enough that firing along your own view ray
+        // reads as a dash instead of a fat square, long enough to survive the
+        // near-parallel projection. A small bright head sells the "bullet".
+        obox(group, {0, 0, 0}, {0, 0, 0}, {0.03f, 0.03f, streak},
+             {1.0f, 0.92f, 0.60f}, 1.0f);
+        glm::mat4 headM = glm::translate(glm::mat4(1.0f), head);
+        obox(headM, {0, 0, 0}, {0, 0, 0}, {0.07f, 0.07f, 0.10f},
+             {1.0f, 0.97f, 0.80f}, 1.0f);
     }
 
     if (uiActive()) {
@@ -2368,11 +2584,30 @@ void Game::appendHudDraws(RenderFrame& frame) const {
     }
 
     // First-spawn control hint: a few seconds of "here's how to play" so a
-    // fresh player never needs the debug HUD to find the keys.
+    // fresh player never needs the debug HUD to find the keys. The hint is
+    // mode-aware - a gun mode never advertises the melee/build keys, and the
+    // build menu only shows in Sandbox (its home), keeping the dev tools off
+    // the normal player path.
     if (controlHintTimer_ > 0.0) {
         float a = float(glm::clamp(controlHintTimer_ / 1.5, 0.0, 1.0)); // fade out
-        centeredLine(viewportH - 96.0f, 2.0f, glm::vec4(0.9f, 0.93f, 1.0f, a),
-                     "WASD MOVE   E INTERACT   LMB ATTACK   RMB BLOCK   B SPAWN MENU   ESC MENU");
+        const WeaponDef* hw = content_.findWeapon(heldWeaponId());
+        const char* hint;
+        if (sandboxMode_) {
+            hint = "WASD MOVE   E INTERACT   LMB ATTACK   TAB INVENTORY   B BUILD MENU   ESC MENU";
+        } else if (hw && hw->kind == WeaponKind::Hitscan) {
+            hint = "WASD MOVE   MOUSE AIM   LMB FIRE   1-9 WEAPONS   ESC MENU";
+        } else {
+            hint = "WASD MOVE   E INTERACT   LMB ATTACK   RMB BLOCK   ESC MENU";
+        }
+        // A subtle mode banner above the controls, so you always know what
+        // you dropped into (and whether it's an early mode).
+        if (!currentModeName_.empty()) {
+            std::string banner = currentModeName_;
+            if (activeModeStatus_ == ModeStatus::Preview) banner += "  -  EARLY ACCESS";
+            centeredLine(viewportH - 122.0f, 2.0f,
+                         glm::vec4(0.62f, 0.78f, 1.0f, a * 0.9f), banner);
+        }
+        centeredLine(viewportH - 96.0f, 2.0f, glm::vec4(0.9f, 0.93f, 1.0f, a), hint);
     }
 
     // Health bar, bottom-left: ghost bar (recent damage) trails behind the
@@ -2751,29 +2986,91 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
     frame.rects.push_back({0, 0, float(viewportW), float(viewportH),
                            glm::vec4(0.05f, 0.07f, 0.10f, ui_ == UiScreen::MainMenu ? 0.55f : 0.62f)});
 
+    // A screen title with a short accent underline beneath it, so every
+    // sub-screen reads as part of one hub instead of a bare label.
+    const glm::vec4 accent(0.42f, 0.62f, 0.95f, 1.0f);
+    auto screenTitle = [&](float y, const char* text) {
+        centeredText(cx, y, 4.0f, white, text);
+        frame.rects.push_back({cx - 60.0f, y + 34.0f, 120.0f, 3.0f, accent});
+    };
+
     // Titles.
     switch (ui_) {
     case UiScreen::MainMenu:
-        centeredText(cx, viewportH * 0.16f, 6.0f, white, "TACMOVE");
-        centeredText(cx, viewportH * 0.16f + 52.0f, 2.0f, dimText,
-                     "FIRST-PERSON SANDBOX PROTOTYPE");
-        std::snprintf(buf, sizeof(buf), "LOCAL PLAY - PROTOCOL V%d RESERVED FOR NETWORKING",
-                      net::kProtocolVersion);
-        centeredText(cx, viewportH - 34.0f, 2.0f, dimText, buf);
+        centeredText(cx, viewportH * 0.15f, 6.5f, white, "TACMOVE");
+        frame.rects.push_back({cx - 150.0f, viewportH * 0.15f + 56.0f, 300.0f, 3.0f, accent});
+        centeredText(cx, viewportH * 0.15f + 74.0f, 2.0f, dimText,
+                     "CROSS-PLATFORM GAME HUB");
+        centeredText(cx, viewportH - 34.0f, 2.0f, dimText,
+                     "LOCAL PLAY NOW  -  ONLINE COMING  -  MACOS / LINUX / WINDOWS");
         break;
-    case UiScreen::Singleplayer:
-        centeredText(cx, viewportH * 0.24f, 4.0f, white, "SINGLEPLAYER");
+    case UiScreen::Play:
+        screenTitle(viewportH * 0.24f, "PLAY");
+        break;
+    case UiScreen::GameModes:
+        screenTitle(viewportH * 0.13f, "GAME MODES");
+        centeredText(cx, viewportH * 0.13f + 54.0f, 2.0f, dimText,
+                     "THE GAMES INSIDE THE GAME - PICK ONE TO JUMP IN");
+        break;
+    case UiScreen::Servers:
+        screenTitle(viewportH * 0.24f, "SERVERS");
+        break;
+    case UiScreen::ServerList:
+        screenTitle(viewportH * 0.16f, "SERVER LIST");
+        centeredText(cx, viewportH * 0.42f, 2.0f, dimText,
+                     "NO SERVERS FOUND");
+        centeredText(cx, viewportH * 0.42f + 30.0f, 2.0f, dimText,
+                     "LIVE SERVER DISCOVERY ARRIVES WITH THE NETWORKING MILESTONE");
+        break;
+    case UiScreen::RecentGames:
+        screenTitle(viewportH * 0.16f, "RECENT GAMES");
+        if (!gamemodes::find(lastModeId_)) {
+            centeredText(cx, viewportH * 0.42f, 2.0f, dimText,
+                         "NOTHING PLAYED YET - START A GAME MODE FIRST");
+        } else {
+            centeredText(cx, viewportH * 0.30f, 2.0f, dimText, "JUMP BACK IN");
+        }
+        break;
+    case UiScreen::Create:
+        screenTitle(viewportH * 0.24f, "CREATE");
+        centeredText(cx, viewportH * 0.24f + 52.0f, 2.0f, dimText,
+                     "MAKE MAPS AND SKINS - GAME MODES ARE BUILT-IN");
+        break;
+    case UiScreen::Skins:
+        screenTitle(viewportH * 0.16f, "SKINS");
+        centeredText(cx, viewportH * 0.28f, 2.0f, dimText,
+                     "PICK A HIGHLIGHT COLOR - FULL CHARACTER SKINS ARE COMING");
+        break;
+    case UiScreen::Publish:
+        screenTitle(viewportH * 0.16f, "PUBLISH");
+        centeredText(cx, viewportH * 0.42f, 2.0f, dimText,
+                     "SHARE MAPS AND SKINS ONLINE");
+        centeredText(cx, viewportH * 0.42f + 30.0f, 2.0f, dimText,
+                     "PUBLISHING ARRIVES WITH ONLINE PLAY - EVERYTHING SAVES LOCALLY FOR NOW");
+        break;
+    case UiScreen::Profile:
+        screenTitle(viewportH * 0.16f, "PROFILE");
+        centeredText(cx, viewportH * 0.36f, 2.5f, white, "PLAYER");
+        centeredText(cx, viewportH * 0.36f + 34.0f, 2.0f, dimText,
+                     lastModeId_.empty()
+                         ? "LAST PLAYED: NOTHING YET"
+                         : ("LAST PLAYED: " + toUpperAscii(
+                               gamemodes::find(lastModeId_)
+                                   ? gamemodes::find(lastModeId_)->displayName
+                                   : lastModeId_)));
+        centeredText(cx, viewportH * 0.36f + 64.0f, 2.0f, dimText,
+                     "STATS AND ACCOUNTS ARRIVE WITH ONLINE PLAY");
         break;
     case UiScreen::CreateWorld:
-        centeredText(cx, viewportH * 0.16f, 4.0f, white, "CREATE WORLD");
+        screenTitle(viewportH * 0.15f, "CREATE MAP");
         break;
     case UiScreen::LoadWorld:
-        centeredText(cx, viewportH * 0.18f, 4.0f, white, "LOAD WORLD");
+        screenTitle(viewportH * 0.17f, "EDIT MAP");
         break;
     case UiScreen::SpawnMenu:
-        centeredText(cx, viewportH * 0.14f, 4.0f, white, "SPAWN MENU");
-        centeredText(cx, viewportH * 0.14f + 42.0f, 2.0f, dimText,
-                     "DEV / ADMIN - B OR ESC CLOSES");
+        screenTitle(viewportH * 0.14f, "BUILD MENU");
+        centeredText(cx, viewportH * 0.14f + 48.0f, 2.0f, dimText,
+                     "SPAWN PROPS, BOTS AND PICKUPS - B OR ESC CLOSES");
         if (spawnableDefs(ContentCategory(spawnCategory_)).empty()) {
             centeredText(cx, viewportH * 0.45f, 2.0f, dimText,
                          "NOTHING IN THIS CATEGORY YET");
@@ -2812,14 +3109,19 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
                                            : std::string("BARE HANDS")));
         break;
     }
-    case UiScreen::Multiplayer:
-        centeredText(cx, viewportH * 0.13f, 4.0f, white, "MULTIPLAYER");
+    case UiScreen::DirectConnect:
+        screenTitle(viewportH * 0.13f, "DIRECT CONNECT");
         break;
     case UiScreen::Settings:
         centeredText(cx, viewportH * 0.10f, 4.0f, white, "SETTINGS");
         break;
     case UiScreen::PauseMain:
         centeredText(cx, viewportH * 0.28f, 4.0f, white, "PAUSED");
+        if (!currentModeName_.empty()) {
+            centeredText(cx, viewportH * 0.28f + 40.0f, 2.0f, dimText,
+                         currentModeName_ +
+                             (activeModeStatus_ == ModeStatus::Preview ? "  -  EARLY" : ""));
+        }
         break;
     case UiScreen::None:
         break;
@@ -2831,7 +3133,7 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
     if (ui_ == UiScreen::CreateWorld) {
         float boxX = cx - kAddressBoxW / 2;
         float boxY = viewportH * 0.24f;
-        centeredText(cx, boxY - 26.0f, 2.0f, label, "WORLD NAME");
+        centeredText(cx, boxY - 26.0f, 2.0f, label, "MAP NAME");
         frame.rects.push_back({boxX, boxY, kAddressBoxW, kAddressBoxH,
                                glm::vec4(0.10f, 0.12f, 0.16f, 0.95f)});
         frame.rects.push_back({boxX, boxY + kAddressBoxH - 3.0f, kAddressBoxW, 3.0f,
@@ -2846,7 +3148,7 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         nameText.text = std::move(shown);
         frame.texts.push_back(std::move(nameText));
 
-        centeredText(cx, viewportH * 0.40f - 28.0f, 2.0f, label, "WORLD TYPE");
+        centeredText(cx, viewportH * 0.40f - 28.0f, 2.0f, label, "BASE MAP");
         const std::vector<WorldTemplate>& tmpls = worldgen::templates();
         if (createTemplateIndex_ >= 0 && createTemplateIndex_ < int(tmpls.size())) {
             const WorldTemplate& sel = tmpls[size_t(createTemplateIndex_)];
@@ -2855,15 +3157,17 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         }
     }
 
-    // Status line for the sandbox screens (create/load feedback, spawn info).
+    // Status line: create/load feedback, spawn info, and the honest notices
+    // set by Host Local Server / Skins.
     if (!menuStatus_.empty() &&
         (ui_ == UiScreen::CreateWorld || ui_ == UiScreen::LoadWorld ||
-         ui_ == UiScreen::SpawnMenu || ui_ == UiScreen::Inventory)) {
+         ui_ == UiScreen::SpawnMenu || ui_ == UiScreen::Inventory ||
+         ui_ == UiScreen::Servers || ui_ == UiScreen::Skins)) {
         centeredText(cx, viewportH * 0.92f, 2.0f, notice, menuStatus_);
     }
 
-    // Multiplayer: direct-connect address box plus one honest status line.
-    if (ui_ == UiScreen::Multiplayer) {
+    // Direct Connect: address box plus one honest status line.
+    if (ui_ == UiScreen::DirectConnect) {
         float boxX = cx - kAddressBoxW / 2;
         float boxY = viewportH * 0.27f;
         centeredText(cx, boxY - 26.0f, 2.0f, label, "SERVER ADDRESS");
@@ -2888,16 +3192,81 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         }
     }
 
+    // Skin swatch palette (Skins screen placeholder selection).
+    static const glm::vec3 kSkinSwatches[] = {
+        {0.85f, 0.30f, 0.28f}, {0.90f, 0.62f, 0.24f}, {0.55f, 0.80f, 0.35f},
+        {0.30f, 0.68f, 0.85f}, {0.55f, 0.45f, 0.85f}, {0.90f, 0.90f, 0.92f},
+    };
+
     // Buttons (same layout the hit-testing used this frame).
     std::vector<UiButton> buttons = buildMenuLayout(viewportW, viewportH);
     for (size_t i = 0; i < buttons.size(); ++i) {
         const UiButton& b = buttons[i];
         bool hovered = int(i) == hoveredButton_;
+
+        // Skin swatches paint their own color; a selected one gets a border.
+        if (b.id == UiButton::Id::SelectSkinColor) {
+            int idx = b.payload >= 0 && b.payload < 6 ? b.payload : 0;
+            if (hovered || b.highlighted) {
+                frame.rects.push_back({b.x - 4, b.y - 4, b.w + 8, b.h + 8,
+                                       glm::vec4(0.95f, 0.97f, 1.0f, 1.0f)});
+            }
+            frame.rects.push_back({b.x, b.y, b.w, b.h,
+                                   glm::vec4(kSkinSwatches[idx], 1.0f)});
+            continue;
+        }
+
         glm::vec4 fill = !b.enabled    ? glm::vec4(0.13f, 0.15f, 0.19f, 0.85f)
-                       : hovered       ? glm::vec4(0.36f, 0.46f, 0.60f, 0.95f)
-                       : b.highlighted ? glm::vec4(0.28f, 0.42f, 0.38f, 0.95f)
-                                       : glm::vec4(0.18f, 0.22f, 0.30f, 0.92f);
+                       : hovered       ? glm::vec4(0.30f, 0.44f, 0.64f, 0.96f)
+                       : b.highlighted ? glm::vec4(0.24f, 0.40f, 0.40f, 0.95f)
+                                       : glm::vec4(0.16f, 0.20f, 0.28f, 0.92f);
         frame.rects.push_back({b.x, b.y, b.w, b.h, fill});
+        // A left accent stripe on the active button reads as a selection cue.
+        if (hovered || b.highlighted) {
+            frame.rects.push_back({b.x, b.y, 4.0f, b.h, accent});
+        }
+
+        // Game-mode cards: name left-aligned, tagline under it, status badge
+        // on the right. Everything else is a plain centered label.
+        if (b.id == UiButton::Id::SelectGameMode) {
+            const std::vector<GameMode>& modes = gamemodes::all();
+            const GameMode* m = (b.payload >= 0 && b.payload < int(modes.size()))
+                                    ? &modes[size_t(b.payload)] : nullptr;
+            TextDraw name;
+            name.x = b.x + 18.0f;
+            name.y = b.y + 12.0f;
+            name.scale = 2.4f;
+            name.color = white;
+            name.text = b.label;
+            frame.texts.push_back(std::move(name));
+            if (m) {
+                TextDraw tag;
+                tag.x = b.x + 18.0f;
+                tag.y = b.y + 38.0f;
+                tag.scale = 1.5f;
+                tag.color = dimText;
+                tag.text = toUpperAscii(m->tagline);
+                frame.texts.push_back(std::move(tag));
+
+                bool playable = m->status == ModeStatus::Playable;
+                const char* badge = playable ? "PLAYABLE" : "EARLY";
+                glm::vec4 badgeCol = playable ? glm::vec4(0.35f, 0.72f, 0.40f, 1.0f)
+                                              : glm::vec4(0.85f, 0.62f, 0.25f, 1.0f);
+                float bw = float(std::strlen(badge)) * 12.0f + 16.0f;
+                float bx = b.x + b.w - bw - 14.0f;
+                frame.rects.push_back({bx, b.y + 16.0f, bw, 24.0f,
+                                       glm::vec4(0.08f, 0.10f, 0.13f, 0.9f)});
+                TextDraw bt;
+                bt.centered = true;
+                bt.x = bx + bw / 2;
+                bt.y = b.y + 21.0f;
+                bt.scale = 1.5f;
+                bt.color = badgeCol;
+                bt.text = badge;
+                frame.texts.push_back(std::move(bt));
+            }
+            continue;
+        }
 
         TextDraw t;
         t.centered = true;

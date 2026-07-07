@@ -35,11 +35,13 @@ int main(int argc, char** argv) {
     bool startInWorld = false; // --world: skip the main menu, straight into the test world
     bool startPaused = false;  // --paused: start in-world on the pause menu (dev/testing)
     const char* equipWeapon = nullptr; // --equip <id>: start in-world holding a weapon
+    const char* startMode = nullptr;   // --mode <id>: boot straight into a game mode
+    const char* menuScreen = nullptr;  // --menu <screen>: boot onto a menu (screenshots)
     const char* shotPath = nullptr;    // --screenshot <path>: BMP of the last frame
     long long fireAtFrame = -1;        // --fire-at N: inject one attack press (dev/testing)
     bool forceNoVsync = false;
     WindowDesc desc;
-    desc.title = "TacMove - Movement Prototype (Milestone 1)";
+    desc.title = "TacMove - Cross-Platform Game Hub";
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
@@ -55,6 +57,10 @@ int main(int argc, char** argv) {
             startInWorld = true;
         } else if (std::strcmp(argv[i], "--equip") == 0 && i + 1 < argc) {
             equipWeapon = argv[++i];
+        } else if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+            startMode = argv[++i];
+        } else if (std::strcmp(argv[i], "--menu") == 0 && i + 1 < argc) {
+            menuScreen = argv[++i];
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             shotPath = argv[++i];
         } else if (std::strcmp(argv[i], "--fire-at") == 0 && i + 1 < argc) {
@@ -87,8 +93,10 @@ int main(int argc, char** argv) {
     game.setRendererName(renderer->name());
     if (forceNoVsync) game.overrideVsync(false); // CLI beats the saved setting
     if (startPaused) game.startInWorldPaused();
+    else if (startMode) game.startInMode(startMode);
     else if (equipWeapon) game.startInWorldEquipped(equipWeapon);
     else if (startInWorld) game.startInWorld();
+    else if (menuScreen) game.debugOpenScreen(menuScreen);
 
     // The game boots to the main menu, so the mouse starts free and text
     // input off; the loop below keeps both in sync with the UI state.

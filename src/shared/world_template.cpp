@@ -37,6 +37,13 @@ const glm::vec3 kPillar{0.46f, 0.50f, 0.58f};
 const glm::vec3 kPlazaFloor{0.55f, 0.57f, 0.60f};
 const glm::vec3 kPlazaWall{0.44f, 0.46f, 0.52f};
 const glm::vec3 kPlazaAccent{0.60f, 0.50f, 0.38f};
+const glm::vec3 kCsFloor{0.52f, 0.49f, 0.43f};   // dusty concrete
+const glm::vec3 kCsWall{0.40f, 0.37f, 0.33f};
+const glm::vec3 kCsCover{0.47f, 0.44f, 0.39f};   // crates / low walls
+const glm::vec3 kCsRamp{0.44f, 0.46f, 0.50f};
+const glm::vec3 kPitFloor{0.30f, 0.33f, 0.30f};  // grim survival pit
+const glm::vec3 kPitWall{0.22f, 0.24f, 0.24f};
+const glm::vec3 kPitAccent{0.36f, 0.30f, 0.26f};
 
 // --- the templates --------------------------------------------------------
 
@@ -143,9 +150,68 @@ WorldTemplate socialHub() {
     return t;
 }
 
+WorldTemplate minicsArena() {
+    WorldTemplate t;
+    t.id = "minics_arena";
+    t.displayName = "MiniCS Arena";
+    t.description = "Compact competitive FPS arena with crate cover and a mid.";
+    // 36 x 44 walled arena; players push from the south, bots hold the north.
+    enclose(t.boxes, 18.0f, 22.0f, 5.0f, kCsFloor, kCsWall, false);
+
+    // Central mid structure: a raised platform with a ramp, splitting sightlines.
+    box(t.boxes, {-4.0f, 0.0f, -3.0f}, {4.0f, 1.2f, 3.0f}, kCsRamp, true);
+    box(t.boxes, {-4.0f, 0.0f, 3.0f}, {4.0f, 0.4f, 5.0f}, kCsRamp, true);   // ramp lip up
+    box(t.boxes, {-4.0f, 0.0f, 5.0f}, {4.0f, 0.8f, 6.5f}, kCsRamp, true);
+
+    // Crate cover clusters (jumpable, breakable sightlines) around the arena.
+    box(t.boxes, {-11.0f, 0.0f, 8.0f}, {-9.0f, 1.2f, 10.0f}, kCsCover, true);
+    box(t.boxes, {-11.0f, 0.0f, 10.0f}, {-9.5f, 2.0f, 11.5f}, kCsCover, true);
+    box(t.boxes, {9.0f, 0.0f, 6.0f}, {11.0f, 1.2f, 8.0f}, kCsCover, true);
+    box(t.boxes, {8.0f, 0.0f, -9.0f}, {10.0f, 1.4f, -7.0f}, kCsCover, true);
+    box(t.boxes, {-10.5f, 0.0f, -8.0f}, {-8.5f, 1.4f, -6.0f}, kCsCover, true);
+    box(t.boxes, {-2.0f, 0.0f, -14.0f}, {2.0f, 1.6f, -12.5f}, kCsCover, true); // north choke
+    box(t.boxes, {13.0f, 0.0f, -2.0f}, {14.5f, 2.2f, 4.0f}, kCsWall);          // side wall bit
+    box(t.boxes, {-14.5f, 0.0f, -2.0f}, {-13.0f, 2.2f, 4.0f}, kCsWall);
+
+    t.spawnPoint = {0.0f, 0.01f, 18.0f}; // south spawn, looking into the arena
+
+    // Loadout support: a spare pistol at spawn, and the opposition holding
+    // north. Duel bots move and pressure; dummies are extra targets to shoot.
+    t.placements.push_back({"glock", {2.0f, 0.0f, 16.5f}, -1.0f});
+    t.placements.push_back({"duel_bot", {-6.0f, 0.0f, -12.0f}, 12.0f});
+    t.placements.push_back({"duel_bot", {6.0f, 0.0f, -13.0f}, 12.0f});
+    t.placements.push_back({"training_dummy", {0.0f, 1.2f, -1.0f}, 6.0f});
+    t.placements.push_back({"training_dummy", {-10.0f, 0.0f, -12.0f}, 6.0f});
+    t.placements.push_back({"training_dummy", {10.0f, 0.0f, -10.0f}, 6.0f});
+    return t;
+}
+
+WorldTemplate zombiePit() {
+    WorldTemplate t;
+    t.id = "zombie_pit";
+    t.displayName = "Zombie Pit";
+    t.description = "Walled survival pit seeded with a horde of hostiles.";
+    enclose(t.boxes, 14.0f, 14.0f, 6.0f, kPitFloor, kPitWall, false);
+    // A couple of low barricades to break line of sight and kite around.
+    box(t.boxes, {-6.0f, 0.0f, -2.0f}, {-4.0f, 1.3f, 2.0f}, kPitAccent, true);
+    box(t.boxes, {4.0f, 0.0f, -3.0f}, {6.0f, 1.3f, 1.0f}, kPitAccent, true);
+    box(t.boxes, {-1.5f, 0.0f, 6.0f}, {1.5f, 1.0f, 7.5f}, kPitAccent, true);
+    t.spawnPoint = {0.0f, 0.01f, 11.0f};
+    // The horde: goblins stand in for zombies until a real mob exists. They
+    // respawn fast so the pit stays dangerous.
+    t.placements.push_back({"glock", {1.5f, 0.0f, 10.0f}, -1.0f});
+    t.placements.push_back({"goblin", {-4.0f, 0.0f, -8.0f}, 8.0f});
+    t.placements.push_back({"goblin", {0.0f, 0.0f, -10.0f}, 8.0f});
+    t.placements.push_back({"goblin", {4.0f, 0.0f, -8.0f}, 8.0f});
+    t.placements.push_back({"goblin", {-7.0f, 0.0f, -3.0f}, 10.0f});
+    t.placements.push_back({"goblin", {7.0f, 0.0f, -3.0f}, 10.0f});
+    return t;
+}
+
 const std::vector<WorldTemplate>& registry() {
     static const std::vector<WorldTemplate> kTemplates = {
-        flatSandbox(), duelYard(), aimRange(), movementCourse(), socialHub(),
+        flatSandbox(), minicsArena(), duelYard(), aimRange(),
+        movementCourse(), socialHub(), zombiePit(),
     };
     return kTemplates;
 }

@@ -23,6 +23,7 @@ add_library(tac_shared STATIC
     src/shared/content.cpp
     src/shared/content_loader.cpp
     src/shared/crafting.cpp
+    src/shared/game_mode.cpp
     src/shared/items.cpp
     src/shared/melee.cpp
     src/shared/player.cpp
