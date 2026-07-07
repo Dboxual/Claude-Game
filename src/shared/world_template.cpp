@@ -1,0 +1,169 @@
+#include "shared/world_template.h"
+
+namespace worldgen {
+
+namespace {
+
+// --- geometry helpers -----------------------------------------------------
+// Small builders so each template reads as a layout, not a wall of vectors.
+
+void box(std::vector<WorldBox>& v, glm::vec3 mn, glm::vec3 mx, glm::vec3 color,
+         bool checkerTop = false) {
+    v.push_back(WorldBox{AABB{mn, mx}, color, checkerTop});
+}
+
+// Floor plate plus a 1 m-thick wall ring, half-extents (hx, hz) on the
+// ground plane and wallH tall. The classic enclosed sandbox box.
+void enclose(std::vector<WorldBox>& v, float hx, float hz, float wallH,
+             glm::vec3 floorCol, glm::vec3 wallCol, bool checkerFloor) {
+    box(v, {-hx, -1.0f, -hz}, {hx, 0.0f, hz}, floorCol, checkerFloor);
+    box(v, {-hx, 0.0f, -hz - 1.0f}, {hx, wallH, -hz}, wallCol);      // north
+    box(v, {-hx, 0.0f, hz}, {hx, wallH, hz + 1.0f}, wallCol);        // south
+    box(v, {-hx - 1.0f, 0.0f, -hz}, {-hx, wallH, hz}, wallCol);      // west
+    box(v, {hx, 0.0f, -hz}, {hx + 1.0f, wallH, hz}, wallCol);        // east
+}
+
+// --- the palette (shared so worlds feel like one game) --------------------
+
+const glm::vec3 kFloorGrey{0.62f, 0.64f, 0.66f};
+const glm::vec3 kWallSlate{0.35f, 0.42f, 0.52f};
+const glm::vec3 kArenaSand{0.58f, 0.53f, 0.44f};
+const glm::vec3 kArenaStone{0.44f, 0.45f, 0.50f};
+const glm::vec3 kRangeFloor{0.50f, 0.52f, 0.57f};
+const glm::vec3 kRangeWall{0.30f, 0.34f, 0.40f};
+const glm::vec3 kMarker{0.80f, 0.78f, 0.42f};
+const glm::vec3 kObstacle{0.55f, 0.48f, 0.40f};
+const glm::vec3 kPillar{0.46f, 0.50f, 0.58f};
+const glm::vec3 kPlazaFloor{0.55f, 0.57f, 0.60f};
+const glm::vec3 kPlazaWall{0.44f, 0.46f, 0.52f};
+const glm::vec3 kPlazaAccent{0.60f, 0.50f, 0.38f};
+
+// --- the templates --------------------------------------------------------
+
+WorldTemplate flatSandbox() {
+    WorldTemplate t;
+    t.id = "flat_sandbox";
+    t.displayName = "Flat Sandbox";
+    t.description = "Empty enclosed flat map. Good for spawning and testing.";
+    enclose(t.boxes, 20.0f, 20.0f, 4.0f, kFloorGrey, kWallSlate, true);
+    t.spawnPoint = {0.0f, 0.01f, 0.0f};
+    return t;
+}
+
+WorldTemplate duelYard() {
+    WorldTemplate t;
+    t.id = "duel_yard";
+    t.displayName = "Duel Yard";
+    t.description = "Small arena with sword, shield and a duelist bot. For melee.";
+    enclose(t.boxes, 12.0f, 12.0f, 4.0f, kArenaSand, kArenaStone, false);
+    // A low stone lip framing the fighting circle (cosmetic, jumpable).
+    box(t.boxes, {-11.0f, 0.0f, -11.0f}, {-10.0f, 0.3f, 11.0f}, kArenaStone);
+    box(t.boxes, {10.0f, 0.0f, -11.0f}, {11.0f, 0.3f, 11.0f}, kArenaStone);
+    t.spawnPoint = {0.0f, 0.01f, 8.0f};
+    // Weapons within reach of spawn, the sparring partners across the yard.
+    t.placements.push_back({"sword", {-1.6f, 0.0f, 5.0f}, -1.0f});
+    t.placements.push_back({"shield", {1.6f, 0.0f, 5.0f}, -1.0f});
+    t.placements.push_back({"duel_bot", {0.0f, 0.0f, -4.0f}, 12.0f});
+    t.placements.push_back({"training_dummy", {-5.5f, 0.0f, -6.0f}, 10.0f});
+    return t;
+}
+
+WorldTemplate aimRange() {
+    WorldTemplate t;
+    t.id = "aim_range";
+    t.displayName = "Aim Range";
+    t.description = "Long lane with a Glock and dummies at distance.";
+    // 12 m wide, 60 m long lane; shooter fires north (-z) from the south end.
+    enclose(t.boxes, 6.0f, 30.0f, 4.0f, kRangeFloor, kRangeWall, false);
+    // Distance marker stripes down the lane (thin plates every ~10 m).
+    for (float z = 15.0f; z >= -25.0f; z -= 10.0f) {
+        box(t.boxes, {-6.0f, 0.0f, z - 0.1f}, {6.0f, 0.02f, z + 0.1f}, kMarker);
+    }
+    t.spawnPoint = {0.0f, 0.01f, 27.0f};
+    // Glock at the firing line; dummies stepping away down the lane.
+    t.placements.push_back({"glock", {0.0f, 0.0f, 24.0f}, -1.0f});
+    t.placements.push_back({"training_dummy", {-2.5f, 0.0f, 15.0f}, 6.0f});
+    t.placements.push_back({"training_dummy", {2.5f, 0.0f, 5.0f}, 6.0f});
+    t.placements.push_back({"training_dummy", {-1.5f, 0.0f, -6.0f}, 6.0f});
+    t.placements.push_back({"training_dummy", {2.0f, 0.0f, -17.0f}, 6.0f});
+    t.placements.push_back({"training_dummy", {0.0f, 0.0f, -26.0f}, 6.0f});
+    return t;
+}
+
+WorldTemplate movementCourse() {
+    WorldTemplate t;
+    t.id = "movement_course";
+    t.displayName = "Movement Course";
+    t.description = "Jumps, a crouch tunnel and strafe pillars. Geometry only.";
+    enclose(t.boxes, 10.0f, 30.0f, 5.0f, kFloorGrey, kWallSlate, true);
+
+    // Jump staircase near spawn: 0.4 m steps (each jumpable, no step-up yet).
+    box(t.boxes, {-3.0f, 0.0f, 17.0f}, {3.0f, 0.4f, 20.0f}, kObstacle, true);
+    box(t.boxes, {-3.0f, 0.0f, 14.0f}, {3.0f, 0.8f, 17.0f}, kObstacle, true);
+    box(t.boxes, {-3.0f, 0.0f, 11.0f}, {3.0f, 1.2f, 14.0f}, kObstacle, true);
+    box(t.boxes, {-3.0f, 0.0f, 8.0f}, {3.0f, 1.6f, 11.0f}, kObstacle, true);
+
+    // Crouch tunnel (z 4..-2): side walls with a low roof - clearance 1.1 m,
+    // so you must crouch to pass along the x-centered corridor.
+    box(t.boxes, {-4.0f, 0.0f, -2.0f}, {-2.0f, 2.5f, 4.0f}, kPillar);
+    box(t.boxes, {2.0f, 0.0f, -2.0f}, {4.0f, 2.5f, 4.0f}, kPillar);
+    box(t.boxes, {-2.0f, 1.1f, -2.0f}, {2.0f, 2.5f, 4.0f}, kPillar);
+
+    // Strafe pillars (z -7..-16): a slalom to weave through.
+    box(t.boxes, {-1.0f, 0.0f, -8.0f}, {1.0f, 3.0f, -7.0f}, kPillar);
+    box(t.boxes, {-4.5f, 0.0f, -12.0f}, {-2.5f, 3.0f, -11.0f}, kPillar);
+    box(t.boxes, {2.5f, 0.0f, -12.0f}, {4.5f, 3.0f, -11.0f}, kPillar);
+    box(t.boxes, {-1.0f, 0.0f, -16.0f}, {1.0f, 3.0f, -15.0f}, kPillar);
+
+    // Obstacle path (z -19..-26): low blocks to hop over.
+    box(t.boxes, {-6.0f, 0.0f, -20.0f}, {-3.0f, 0.6f, -19.0f}, kObstacle, true);
+    box(t.boxes, {3.0f, 0.0f, -22.0f}, {6.0f, 0.9f, -21.0f}, kObstacle, true);
+    box(t.boxes, {-2.0f, 0.0f, -25.0f}, {2.0f, 0.5f, -24.0f}, kObstacle, true);
+
+    t.spawnPoint = {0.0f, 0.01f, 27.0f};
+    return t;
+}
+
+WorldTemplate socialHub() {
+    WorldTemplate t;
+    t.id = "social_hub";
+    t.displayName = "Social Hub";
+    t.description = "Open plaza with a few props. A local hangout world type.";
+    enclose(t.boxes, 20.0f, 20.0f, 5.0f, kPlazaFloor, kPlazaWall, false);
+    // Central raised dais and a couple of low benches to break up the space.
+    box(t.boxes, {-3.0f, 0.0f, -3.0f}, {3.0f, 0.5f, 3.0f}, kPlazaAccent, true);
+    box(t.boxes, {-9.0f, 0.0f, 6.0f}, {-6.0f, 0.45f, 7.0f}, kPlazaAccent);
+    box(t.boxes, {6.0f, 0.0f, -7.0f}, {9.0f, 0.45f, -6.0f}, kPlazaAccent);
+    t.spawnPoint = {0.0f, 0.01f, 12.0f};
+    // A few carryable props so the plaza is not bare.
+    t.placements.push_back({"crate", {6.0f, 0.0f, 3.0f}, 0.0f});
+    t.placements.push_back({"crate", {-6.5f, 0.0f, -2.0f}, 0.0f});
+    t.placements.push_back({"barrel", {5.0f, 0.0f, 8.0f}, 0.0f});
+    t.placements.push_back({"barrel", {-8.0f, 0.0f, -5.0f}, 0.0f});
+    return t;
+}
+
+const std::vector<WorldTemplate>& registry() {
+    static const std::vector<WorldTemplate> kTemplates = {
+        flatSandbox(), duelYard(), aimRange(), movementCourse(), socialHub(),
+    };
+    return kTemplates;
+}
+
+} // namespace
+
+const std::vector<WorldTemplate>& templates() { return registry(); }
+
+const WorldTemplate* findTemplate(const std::string& id) {
+    for (const WorldTemplate& t : registry()) {
+        if (t.id == id) return &t;
+    }
+    return nullptr;
+}
+
+const WorldTemplate& fallbackTemplate() {
+    // flat_sandbox is guaranteed to be registry()[0].
+    return registry().front();
+}
+
+} // namespace worldgen

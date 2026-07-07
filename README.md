@@ -144,23 +144,42 @@ are player preferences rather than physics.
 
 ## Sandbox worlds, weapons & dev spawn menu (Phase 2)
 
-**Create World** asks for a name and drops you into a fresh, enclosed flat
-map. Each world lives in its own folder, `worlds/<folder_name>/world.cfg` —
-a plain-text file (`key = value`, one `entity` line per placed object) that
-is safe to hand-edit and diff:
+**Create World** asks for a name, lets you pick a **world type**, and drops
+you into a fresh world of that type. The world types are the starting
+layouts a new world is built from:
+
+| World type | What it is |
+|---|---|
+| **Flat Sandbox** | Empty enclosed flat map — spawn things and test (the default) |
+| **Duel Yard** | Small arena with a sword, shield, and a duelist bot — melee practice |
+| **Aim Range** | Long straight range with a Glock and target dummies at distance |
+| **Movement Course** | Jump steps, a crouch tunnel, and strafe pillars — pure geometry |
+| **Social Hub** | Open plaza with a few props — a local hangout world type |
+
+Each world lives in its own folder, `worlds/<folder_name>/world.cfg` — a
+plain-text file (`key = value`, one `entity` line per placed object) that is
+safe to hand-edit and diff:
 
 ```
-version = 2
+version = 3
 name = My World
+world_type = duel_yard
 entity = crate 3.00 0.00 5.00 0
 entity = glock 1.50 0.00 3.00 10
 ```
 
-The last number is **respawn seconds**: pickups/bots come back that long
-after being taken or destroyed; 0 means gone for good (v1 files without the
-field still load). **Load World** lists every world under `worlds/` and
-reopens it with all placed objects. The classic **test arena** is still
-there via Start Test World — it is a fixed training map and is never saved.
+`world_type` is the template the map geometry comes from; worlds saved
+before world types existed (no `world_type` line) still load and fall back
+to **Flat Sandbox**. The last entity number is **respawn seconds**:
+pickups/bots come back that long after being taken or destroyed; 0 means
+gone for good (v1 files without the field still load). **Load World** lists
+every world under `worlds/` and reopens it with its saved type and all
+placed objects. The classic **test arena** is still there via Start Test
+World — it is a fixed polished training map and is never saved.
+
+World types are defined in shared code (`src/shared/world_template.{h,cpp}`)
+as pure data — geometry, spawn point, and starting entity placements — so
+the same struct a future loader can fill from `server/content/maps/*.cfg`.
 
 In game, **B** opens the dev/admin spawn menu (GMod-style category tabs:
 **Weapons / Bots / Props / Pickups** — Q now throws your weapon). Objects spawn a couple of meters in
@@ -290,7 +309,8 @@ server/
     ├── entities/*.cfg       # size, color, solid, carryable, weapon,
     │                        #   max_health, respawn_seconds, visual parts
     ├── items/               # reserved (empty)
-    ├── maps/                # reserved (worlds are still code-built)
+    ├── maps/                # reserved: world-type geometry is code-defined
+    │                        #   today (src/shared/world_template.cpp)
     └── sounds/              # original synthesized WAVs + CREDITS.md (licenses)
 ```
 

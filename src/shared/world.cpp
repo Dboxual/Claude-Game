@@ -1,5 +1,7 @@
 #include "shared/world.h"
 
+#include "shared/world_template.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -153,23 +155,14 @@ void World::consumePickup(int index) {
     }
 }
 
-// Sandbox base for created worlds: an enclosed 40x40 m flat plate. Placed
-// entities come from the world save file; the base geometry is implied by
-// the format version, so saves stay tiny and readable.
-void World::buildFlatMap() {
-    boxes_.clear();
+// Geometry + spawn from a world template. Entities are the caller's job:
+// a new world gets the template's starting placements, a loaded world gets
+// the ones from its save file - both resolved against the content registry
+// outside shared code.
+void World::buildFromTemplate(const WorldTemplate& t) {
+    boxes_ = t.boxes;
     entities_.clear();
-
-    const glm::vec3 floorGrey{0.62f, 0.64f, 0.66f};
-    const glm::vec3 wallSlate{0.35f, 0.42f, 0.52f};
-
-    add({-20, -1, -20}, {20, 0, 20}, floorGrey, true);
-    add({-20, 0, -21}, {20, 4, -20}, wallSlate); // north
-    add({-20, 0, 20}, {20, 4, 21}, wallSlate);   // south
-    add({-21, 0, -20}, {-20, 4, 20}, wallSlate); // west
-    add({20, 0, -20}, {21, 4, 20}, wallSlate);   // east
-
-    spawnPoint = {0.0f, 0.01f, 0.0f};
+    spawnPoint = t.spawnPoint;
 }
 
 // The RPG sandbox test zone: a 40x40 m grassy glade ringed by earthen

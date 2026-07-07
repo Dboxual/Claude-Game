@@ -75,7 +75,7 @@ private:
             // singleplayer screen
             StartTestWorld, OpenCreateWorld, OpenLoadWorld, BackToMain,
             // create/load world screens
-            ConfirmCreateWorld, LoadWorldEntry, BackToSingleplayer,
+            ConfirmCreateWorld, LoadWorldEntry, BackToSingleplayer, SelectWorldType,
             // multiplayer screen (direct connect only until networking lands)
             Connect, QuickLocalhost,
             // pause menu
@@ -181,6 +181,8 @@ private:
     std::string currentWorldName_;
     std::vector<WorldListEntry> worldList_; // refreshed on entering LoadWorld
     std::string worldNameInput_;            // CreateWorld text field
+    int createTemplateIndex_ = 0;           // world type chosen on Create World
+    std::string currentWorldType_;          // template id of the live world (saved)
 
     // Combat / interaction state (reset by beginSession).
     Inventory inventory_;   // legacy sandbox weapon slots (1-9)

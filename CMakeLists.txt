@@ -28,6 +28,7 @@ add_library(tac_shared STATIC
     src/shared/player.cpp
     src/shared/world.cpp
     src/shared/world_save.cpp
+    src/shared/world_template.cpp
 )
 target_include_directories(tac_shared PUBLIC src)
 target_link_libraries(tac_shared PUBLIC glm::glm)

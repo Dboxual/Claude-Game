@@ -4,6 +4,7 @@
 #include "shared/log.h"
 #include "shared/protocol.h"
 #include "shared/world_save.h"
+#include "shared/world_template.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -299,11 +300,26 @@ void Game::createWorld() {
         return;
     }
 
-    world_.buildFlatMap();
+    // Build the chosen world type: its geometry, then its starting entities
+    // (resolved through the content registry, like a loaded world's are).
+    const std::vector<WorldTemplate>& tmpls = worldgen::templates();
+    const WorldTemplate& tmpl =
+        (createTemplateIndex_ >= 0 && createTemplateIndex_ < int(tmpls.size()))
+            ? tmpls[size_t(createTemplateIndex_)]
+            : worldgen::fallbackTemplate();
+    world_.buildFromTemplate(tmpl);
+    for (const WorldTemplate::Placement& p : tmpl.placements) {
+        if (const EntityDef* def = content_.find(p.defId)) {
+            world_.addEntity(*def, p.pos, p.respawnSeconds);
+        }
+    }
+
     currentWorldName_ = worldNameInput_;
+    currentWorldType_ = tmpl.id;
     currentWorldFile_ = file;
     saveCurrentWorld();
-    eng::logInfo("Created world '%s' at %s", currentWorldName_.c_str(), file.c_str());
+    eng::logInfo("Created world '%s' (%s) at %s", currentWorldName_.c_str(),
+                 tmpl.id.c_str(), file.c_str());
     beginSession();
 }
 
@@ -323,7 +339,20 @@ void Game::loadWorld(int listIndex) {
         return;
     }
 
-    world_.buildFlatMap();
+    // Geometry from the saved world type; entities from the save file. An
+    // empty or unknown type falls back to flat_sandbox so old and
+    // newer-than-us saves both still open.
+    const WorldTemplate* tmpl = worldgen::findTemplate(data.worldType);
+    if (!tmpl) {
+        if (!data.worldType.empty()) {
+            eng::logError("World '%s': unknown world_type '%s', using flat_sandbox",
+                          entry.folder.c_str(), data.worldType.c_str());
+        }
+        tmpl = &worldgen::fallbackTemplate();
+    }
+    world_.buildFromTemplate(*tmpl);
+    currentWorldType_ = tmpl->id;
+
     int skipped = 0;
     for (const WorldSaveData::Spawn& s : data.entities) {
         if (const EntityDef* def = content_.find(s.defId)) {
@@ -339,8 +368,8 @@ void Game::loadWorld(int listIndex) {
 
     currentWorldName_ = data.displayName.empty() ? entry.folder : data.displayName;
     currentWorldFile_ = file;
-    eng::logInfo("Loaded world '%s' (%d entities)", currentWorldName_.c_str(),
-                 int(world_.entities().size()));
+    eng::logInfo("Loaded world '%s' (%s, %d entities)", currentWorldName_.c_str(),
+                 tmpl->id.c_str(), int(world_.entities().size()));
     beginSession();
 }
 
@@ -348,6 +377,7 @@ void Game::saveCurrentWorld() {
     if (currentWorldFile_.empty()) return; // test arena
     WorldSaveData data;
     data.displayName = currentWorldName_;
+    data.worldType = currentWorldType_;
     data.entities.reserve(world_.entities().size());
     for (const WorldEntity& e : world_.entities()) {
         // Inactive entities (picked up / destroyed, awaiting respawn) keep
@@ -1585,6 +1615,7 @@ void Game::activateButton(UiButton::Id id, int payload) {
     case Id::StartTestWorld: startTestWorld(); break;
     case Id::OpenCreateWorld:
         worldNameInput_.clear();
+        createTemplateIndex_ = 0; // default to flat_sandbox
         menuStatus_.clear();
         ui_ = UiScreen::CreateWorld;
         break;
@@ -1595,6 +1626,7 @@ void Game::activateButton(UiButton::Id id, int payload) {
         break;
 
     // Create/load world screens.
+    case Id::SelectWorldType: createTemplateIndex_ = payload; break;
     case Id::ConfirmCreateWorld: createWorld(); break;
     case Id::LoadWorldEntry: loadWorld(payload); break;
 
@@ -1719,12 +1751,29 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         });
         break;
 
-    case UiScreen::CreateWorld:
-        column(viewportH * 0.42f, {
+    case UiScreen::CreateWorld: {
+        // A row of world-type tabs (highlight the selected one), then the
+        // create/back column below the type description.
+        const std::vector<WorldTemplate>& tmpls = worldgen::templates();
+        const int n = int(tmpls.size());
+        const float tabW = 128.0f, tabH = 40.0f, tabGap = 8.0f;
+        float tabX = cx - (n * tabW + (n - 1) * tabGap) / 2.0f;
+        const float tabY = viewportH * 0.40f;
+        for (int i = 0; i < n; ++i) {
+            // Short tab caption: the first word of the display name.
+            std::string cap = tmpls[size_t(i)].displayName;
+            size_t sp = cap.find(' ');
+            if (sp != std::string::npos) cap.resize(sp);
+            buttons.push_back({Id::SelectWorldType, tabX, tabY, tabW, tabH,
+                               toUpperAscii(cap), true, i, i == createTemplateIndex_});
+            tabX += tabW + tabGap;
+        }
+        column(viewportH * 0.58f, {
             {Id::ConfirmCreateWorld, 0, 0, 0, 0, "CREATE", true},
             {Id::BackToSingleplayer, 0, 0, 0, 0, "BACK", true},
         });
         break;
+    }
 
     case UiScreen::LoadWorld: {
         float y = viewportH * 0.30f;
@@ -2776,10 +2825,12 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         break;
     }
 
-    // Create World: world-name input box (always focused on this screen).
+    // Create World: world-name input box (always focused on this screen)
+    // plus the world-type heading and the selected type's description. The
+    // type tabs themselves are buttons from buildMenuLayout.
     if (ui_ == UiScreen::CreateWorld) {
         float boxX = cx - kAddressBoxW / 2;
-        float boxY = viewportH * 0.28f;
+        float boxY = viewportH * 0.24f;
         centeredText(cx, boxY - 26.0f, 2.0f, label, "WORLD NAME");
         frame.rects.push_back({boxX, boxY, kAddressBoxW, kAddressBoxH,
                                glm::vec4(0.10f, 0.12f, 0.16f, 0.95f)});
@@ -2794,6 +2845,14 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         nameText.color = white;
         nameText.text = std::move(shown);
         frame.texts.push_back(std::move(nameText));
+
+        centeredText(cx, viewportH * 0.40f - 28.0f, 2.0f, label, "WORLD TYPE");
+        const std::vector<WorldTemplate>& tmpls = worldgen::templates();
+        if (createTemplateIndex_ >= 0 && createTemplateIndex_ < int(tmpls.size())) {
+            const WorldTemplate& sel = tmpls[size_t(createTemplateIndex_)];
+            centeredText(cx, viewportH * 0.40f + 54.0f, 2.0f, notice,
+                         toUpperAscii(sel.description));
+        }
     }
 
     // Status line for the sandbox screens (create/load feedback, spawn info).

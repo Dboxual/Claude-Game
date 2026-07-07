@@ -71,10 +71,15 @@ struct WorldEntity {
     }
 };
 
+struct WorldTemplate; // shared/world_template.h
+
 class World {
 public:
     void buildTestMap();
-    void buildFlatMap(); // sandbox base for created worlds: floor + walls only
+    // Replace geometry + spawn point with a template's layout (entities are
+    // cleared; the caller places the template's starting entities and/or the
+    // saved ones through addEntity so content lookups stay caller-side).
+    void buildFromTemplate(const WorldTemplate& t);
     bool overlapsAny(const AABB& box) const;
     const std::vector<WorldBox>& boxes() const { return boxes_; }
 

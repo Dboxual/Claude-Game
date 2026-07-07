@@ -21,8 +21,10 @@ std::string serializeWorldSave(const WorldSaveData& data) {
     out += "#   entity = <def_id> <x> <y> <z> <respawn_seconds>\n";
     out += "# respawn_seconds: pickups/bots come back this long after being\n";
     out += "# taken/destroyed; 0 = never respawns.\n";
-    out += "version = 2\n";
+    out += "# world_type: the world template this map's geometry comes from.\n";
+    out += "version = 3\n";
     out += "name = " + data.displayName + "\n";
+    if (!data.worldType.empty()) out += "world_type = " + data.worldType + "\n";
     char buf[160];
     for (const WorldSaveData::Spawn& s : data.entities) {
         std::snprintf(buf, sizeof(buf), "entity = %s %.2f %.2f %.2f %.1f\n",
@@ -53,6 +55,9 @@ bool parseWorldSave(const std::string& text, WorldSaveData& out) {
             sawAnything = true;
         } else if (key == "name") {
             out.displayName = value;
+            sawAnything = true;
+        } else if (key == "world_type") {
+            out.worldType = value;
             sawAnything = true;
         } else if (key == "entity") {
             char defId[64] = {0};

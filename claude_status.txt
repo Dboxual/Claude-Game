@@ -1,3 +1,91 @@
+TacMove — WIP status (branch wip-m3-content-platform, 2026-07-06, update 8)
+============================================================================
+
+Eighth drop: WORLD TYPES foundation. Create World can now build different
+kinds of local worlds from starting templates. Deliberately small: no
+networking, no map file loader, no procedural terrain, no combat/renderer
+changes. The polished test glade (Start Test World) is untouched.
+
+DONE THIS DROP (built on Windows x64, client + server, /W4 zero warnings)
+--------------------------------------------------------------------------
+NEW - WORLD TEMPLATE SYSTEM (shared, server-safe):
+- src/shared/world_template.{h,cpp}: a WorldTemplate is pure data - id,
+  display name, description, static geometry (vector<WorldBox>), spawn
+  point, and starting entity placements (defId + pos + respawn, resolved
+  against the content registry by the caller, exactly like a save file's
+  entities). std + glm only; no IO, no content lookups. Shaped so a future
+  loader can fill it from server/content/maps/*.cfg without touching callers.
+- Five built-in types (worldgen::templates(), in menu order):
+    flat_sandbox    - empty enclosed 40x40 flat map (the default + fallback)
+    duel_yard       - small arena, sword + shield + duelist bot + dummy
+    aim_range       - 12x60 lane, Glock at the line, 5 dummies down-range
+    movement_course - jump steps, crouch tunnel, strafe pillars (geometry only)
+    social_hub      - open plaza, low dais/benches, a few crates/barrels
+- World::buildFromTemplate(t): swaps geometry + spawn point, clears
+  entities. buildFlatMap() was removed - flat_sandbox replaces it (single
+  source of truth for the flat map). buildTestMap() (the glade) is untouched.
+
+SAVE FORMAT v3 (backward compatible):
+- world.cfg gains one line: `world_type = <id>`. WorldSaveData grew a
+  worldType field; serialize writes it, parse reads it.
+- Old saves without world_type parse fine and load as flat_sandbox. v1/v2
+  entity lines still parse. Unknown/newer world_type ids fall back to
+  flat_sandbox with a logged warning, never a failure.
+
+CREATE WORLD UI:
+- The Create World screen now has a row of world-type tabs (FLAT / DUEL /
+  AIM / MOVEMENT / SOCIAL) under the name box, highlighting the selected
+  one, with the type's description shown live below. Enter or CREATE builds
+  the chosen type, places its starting entities, and saves world_type.
+- Load World is unchanged in use: it reads world_type and rebuilds the
+  right geometry. Start Test World is still the fixed glade, never saved.
+
+VERIFIED THIS DROP
+------------------
+- Clean /W4 Release build, client + server, zero warnings.
+- Smoke: client --world --frames 240 --novsync exit 0; server --ticks 256
+  exit 0.
+- Throwaway unit check against tac_shared (scratch, not committed): all 5
+  templates present with flat_sandbox first/fallback; each builds >=5 boxes
+  and its spawn point with entities left to the caller; save round-trips
+  world_type at version 3; a legacy v2 save (no world_type) parses with an
+  empty type so the loader substitutes flat_sandbox. ALL CHECKS PASSED.
+- NOT visually verified: clicking through the Create World type tabs on a
+  real window (no CLI path jumps to that menu, and a screenshot pass was
+  skipped to avoid popping a window mid-use). First human run should:
+  create one of each type, confirm geometry/props look right and the player
+  spawns in-bounds, quit, and Load World it back to confirm world_type
+  persisted.
+
+WHERE THE NUMBERS LIVE (for taste tuning)
+-----------------------------------------
+- All world-type geometry + placements: src/shared/world_template.cpp (one
+  function per template; helpers box()/enclose() at the top).
+- Save format: src/shared/world_save.cpp (serialize/parse).
+- Create World menu: buildMenuLayout() CreateWorld case + the CreateWorld
+  block in appendMenuDraws(), both in game.cpp.
+
+UNFINISHED (known, deliberate)
+------------------------------
+- No maps/*.cfg loader yet: templates are code-defined. The struct is the
+  load target when that lands.
+- Templates place only existing content ids (sword/shield/glock/duel_bot/
+  training_dummy/crate/barrel). No new content was added.
+- Movement course has no timer/checkpoints; it is layout only, as asked.
+- Social hub is a local world type only - no multiplayer, nothing faked.
+- The dedicated server still does not build worlds from templates (it is
+  config-only until the networking/sim milestone); the template module is
+  shared so it can when that lands.
+
+BROKEN / WATCH OUT
+------------------
+- World::buildFlatMap() was removed. Any out-of-tree caller should use
+  buildFromTemplate(worldgen::fallbackTemplate()) instead.
+- world.h forward-declares WorldTemplate; world.cpp includes
+  world_template.h. Keep that direction (no include cycle).
+
+-- older drops below --------------------------------------------------------
+
 TacMove — WIP status (branch wip-m3-content-platform, 2026-07-06, update 7)
 ============================================================================
 
