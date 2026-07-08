@@ -127,7 +127,10 @@ bool Game::init(IFileSystem& fs, IAudio* audio) {
         const char* names[] = {"footstep",  "swing",       "gunshot",   "pickup",
                                "dummy_hit", "melee_hit",   "ui_click",  "block",
                                "parry",     "shield_block", "kick_hit",
-                               "guard_break", "throw",     "windup_cue"};
+                               "guard_break", "throw",     "windup_cue",
+                               // MiniCS: pistol handling + round/kill feedback.
+                               "reload",    "dry_fire",    "kill_confirm",
+                               "enemy_shot", "round_win",  "round_lose"};
         for (const char* n : names) {
             audio_->loadSound(n, serverRoot_ + "content/sounds/" + n + ".wav");
         }
@@ -150,7 +153,20 @@ bool Game::init(IFileSystem& fs, IAudio* audio) {
     }
     tickDt_ = 1.0 / std::max(30.0f, cfg_.tickRate); // startup only; F5 keeps the tick
 
-    world_.buildTestMap();
+    // Menu backdrop: orbit the neon MiniCS arena so the hub reads as a real
+    // game the instant it opens (this world is replaced the moment any mode or
+    // sandbox world is entered).
+    if (const WorldTemplate* menuMap = worldgen::findTemplate("minics_arena")) {
+        world_.buildFromTemplate(*menuMap);
+        for (const WorldTemplate::Placement& p : menuMap->placements) {
+            if (const EntityDef* def = content_.find(p.defId)) {
+                world_.addEntity(*def, p.pos, p.respawnSeconds);
+            }
+        }
+        currentWorldType_ = "minics_arena";
+    } else {
+        world_.buildTestMap();
+    }
     player_.respawn(world_.spawnPoint);
     prevPos_ = player_.pos;
     eyeHeight_ = cfg_.standHeight - cfg_.eyeOffset;
@@ -218,6 +234,15 @@ void Game::beginSession() {
     hitStop_ = shakeTime_ = shakeAmp_ = damageFlash_ = 0.0f;
     playerHealth_ = playerHealthShown_ = 100.0f;
     sinceDamaged_ = 999.0f;
+    // MiniCS + gun feel reset (a fresh session is never mid-round or mid-reload).
+    minicsActive_ = false;
+    minicsBrains_.clear();
+    scorePopups_.clear();
+    minicsScore_ = minicsKills_ = 0;
+    minicsEnemiesTotal_ = minicsEnemiesAlive_ = 0;
+    killMarkerTimer_ = hurtTimer_ = 0.0f;
+    magAmmo_ = reserveAmmo_ = 0;
+    reloadTimer_ = recoilPitch_ = recoilYaw_ = 0.0f;
     swayX_ = swayY_ = landDipTimer_ = landDipAmount_ = 0.0f;
     wasGrounded_ = true;
     controlHintTimer_ = 8.0; // a few seconds of "here's how to play"
@@ -296,6 +321,7 @@ void Game::startTestWorld() {
 // part of the ruleset is not built yet.
 void Game::startGameMode(const GameMode& mode) {
     lastModeId_ = mode.id;
+    const bool isMinics = (mode.id == "minics");
 
     if (mode.mapTemplateId == gamemodes::kTestGladeMap) {
         startTestWorld(); // builds the glade + beginSession (+ sandbox fields)
@@ -307,9 +333,15 @@ void Game::startGameMode(const GameMode& mode) {
             tmpl = &worldgen::fallbackTemplate();
         }
         world_.buildFromTemplate(*tmpl);
-        for (const WorldTemplate::Placement& p : tmpl->placements) {
-            if (const EntityDef* def = content_.find(p.defId)) {
-                world_.addEntity(*def, p.pos, p.respawnSeconds);
+        if (isMinics) {
+            // MiniCS owns its opposition: skip the template's melee duel-bots
+            // and dummies and place the ranged round-loop enemies instead.
+            placeMinicsEntities();
+        } else {
+            for (const WorldTemplate::Placement& p : tmpl->placements) {
+                if (const EntityDef* def = content_.find(p.defId)) {
+                    world_.addEntity(*def, p.pos, p.respawnSeconds);
+                }
             }
         }
         currentWorldFile_.clear(); // mode sessions are not saved as maps
@@ -326,6 +358,7 @@ void Game::startGameMode(const GameMode& mode) {
 
     currentModeName_ = toUpperAscii(mode.displayName);
     activeModeStatus_ = mode.status;
+    if (isMinics) startMinicsRound(); // build enemy brains + start the countdown
     eng::logInfo("Started game mode '%s' on map '%s'", mode.id.c_str(),
                  mode.mapTemplateId.c_str());
     if (mode.status == ModeStatus::Preview && !mode.previewNote.empty()) {
@@ -678,8 +711,14 @@ glm::vec3 Game::eyePosition() const {
 }
 
 glm::vec3 Game::lookDirection() const {
-    return glm::vec3(std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_),
-                     -std::cos(yaw_) * std::cos(pitch_));
+    // Recoil is a real (recovering) view-punch: it nudges the aim up and a
+    // touch sideways, so sustained fire climbs and must be controlled, then
+    // settles back to the crosshair. Shots read the direction BEFORE the new
+    // kick is applied (see tryAttack), so the first round is always true.
+    float y = yaw_ + glm::radians(recoilYaw_);
+    float p = glm::clamp(pitch_ + glm::radians(recoilPitch_),
+                         glm::radians(-89.0f), glm::radians(89.0f));
+    return glm::vec3(std::sin(y) * std::cos(p), std::sin(p), -std::cos(y) * std::cos(p));
 }
 
 // --- RPG systems: items in hand, gathering, ground drops, mobs, camera ----
@@ -890,7 +929,25 @@ void Game::tryInteract() {
 void Game::tryAttack() {
     const WeaponDef* weapon = content_.findWeapon(heldWeaponId());
     if (!weapon || weapon->kind != WeaponKind::Hitscan) return;
+
+    // In MiniCS the trigger only fires while the round is Live; on the end
+    // screen the click means "play again" (handled in update()).
+    if (minicsActive_ && minicsPhase_ != MiniCSPhase::Live) return;
+    if (reloadTimer_ > 0.0f) return; // hands busy chambering a round
     if (attackCooldown_ > 0.0f) return;
+
+    // Ammo gate: an empty magazine dry-fires (a flat click) and auto-reloads
+    // instead of shooting. Only the Glock uses ammo; the staff is cooldown-only.
+    if (usesAmmo()) {
+        if (magAmmo_ <= 0) {
+            sfx("dry_fire", 0.98f + rand01() * 0.06f);
+            attackCooldown_ = 0.18f; // don't machine-gun the empty click
+            if (reserveAmmo_ > 0) tryReload();
+            else showToast("OUT OF AMMO");
+            return;
+        }
+        magAmmo_ -= 1;
+    }
 
     attackCooldown_ = weapon->cooldownSeconds;
     muzzleFlashTimer_ = 0.07f;
@@ -921,6 +978,13 @@ void Game::tryAttack() {
     tr.life = tr.total = std::max(0.02f, dist / 130.0f); // ~130 m/s visible speed
     tr.impact = endT < weapon->range - 0.01f;
     tracers_.push_back(tr);
+
+    // Recoil view-punch AFTER the round leaves: the muzzle snaps up and a hair
+    // sideways, then recovers in update(). Capped so it never spins the camera.
+    if (usesAmmo()) {
+        recoilPitch_ = std::min(7.0f, recoilPitch_ + 0.62f + rand01() * 0.30f);
+        recoilYaw_ += (rand01() - 0.5f) * 0.55f;
+    }
     if (hit.index < 0) return;
 
     const WorldEntity& target = world_.entities()[size_t(hit.index)];
@@ -931,15 +995,26 @@ void Game::tryAttack() {
     glm::vec3 targetPos = target.pos;
     hitMarkerTimer_ = 0.12f;
     sfx("dummy_hit");
+    // A struck MiniCS enemy flinches: interrupt its aim and make it reel.
+    auto brainIt = minicsBrains_.find(targetEid);
+    if (brainIt != minicsBrains_.end()) {
+        brainIt->second.state = MinicsEnemy::State::Flinch;
+        brainIt->second.flinchTimer = std::max(brainIt->second.flinchTimer, 0.22f);
+        brainIt->second.aimBlend *= 0.4f;
+    }
     bool destroyed = world_.damageEntity(hit.index, weapon->damage);
     aimInteract_ = {};
     aimInfo_ = {}; // entity vector may have shifted; refreshed next frame
     if (destroyed) {
         bots_.erase(targetEid); // a respawned duelist starts with a fresh brain
         mobs_.erase(targetEid);
-        spawnLootDrop(targetId, targetPos);
-        const EntityDef* def = content_.find(targetId);
-        showToast(toUpperAscii(def ? def->displayName : targetId) + " DESTROYED");
+        if (minicsBrains_.erase(targetEid) > 0) {
+            onMinicsEnemyKilled(targetPos); // score + kill confirm + popup
+        } else {
+            spawnLootDrop(targetId, targetPos);
+            const EntityDef* def = content_.find(targetId);
+            showToast(toUpperAscii(def ? def->displayName : targetId) + " DESTROYED");
+        }
     }
 }
 
@@ -1416,6 +1491,12 @@ void Game::damagePlayer(float amount) {
     sinceDamaged_ = 0.0f;
     if (playerHealth_ > 0.0f) return;
 
+    if (minicsActive_) {
+        // MiniCS is a round: going down loses it (no free sandbox respawn).
+        if (minicsPhase_ == MiniCSPhase::Live) minicsLose("YOU WERE ELIMINATED");
+        return;
+    }
+
     player_.respawn(world_.spawnPoint);
     player_.vel = glm::vec3(0.0f);
     prevPos_ = player_.pos;
@@ -1446,14 +1527,380 @@ void Game::triggerShake(float amplitude, float seconds) {
     }
 }
 
+// --- MiniCS: the round-based FPS loop --------------------------------------
+// A self-contained match controller: spawn a set of ranged enemies, count
+// down, fight until they are all eliminated (win) or the player goes down /
+// the clock runs out (lose), then offer a one-press restart. Everything here
+// is gated on minicsActive_, so the sandbox and other modes never see it.
+
+// ===========================================================================
+// MINICS TUNING INDEX - the knobs that shape how the round feels. Most live
+// right here; the rest are pointed to so they are easy to find:
+//   * Round length / countdown ....... kMinicsRoundSeconds (below);
+//                                       countdown = startMinicsRound()'s 2.0f
+//   * Enemy count + spawn spots ....... placeMinicsEntities()
+//   * Enemy engage range .............. kMinicsEngageMin/Max (below)
+//   * Enemy speed / fire cadence ...... updateMinicsEnemies() (3.1 / 2.5 m/s;
+//                                       fireCooldown 0.85 + rf()*0.95)
+//   * Enemy accuracy + damage ......... minicsEnemyFire() (acc, 8 + rand*5)
+//   * Enemy toughness ................. minics_bot.cfg max_health (90) + builtin
+//   * Glock damage / cadence .......... glock.cfg (34 / 0.14) + builtin
+//   * Magazine / reserve / reload ..... game.h magSize_/reloadDuration_,
+//                                       startMinicsRound() reserveAmmo_
+//   * Recoil kick / recovery .......... tryAttack() recoilPitch_, update() 11*dt
+//   * Neon look / atmosphere .......... world_template.cpp minicsArena(),
+//                                       buildRenderFrame() atmosphere block
+// ===========================================================================
+namespace {
+constexpr float kMinicsRoundSeconds = 75.0f; // round clock during the fight
+constexpr float kMinicsEngageMin = 6.0f;     // enemies try to hold this range...
+constexpr float kMinicsEngageMax = 15.0f;    // ...and close/open toward it
+} // namespace
+
+bool Game::usesAmmo() const {
+    // Ammo, reload and recoil are MiniCS gun-feel: scoped to the round so the
+    // sandbox Glock stays exactly as it was (cooldown-only, no magazine, no
+    // recoil, no ammo HUD).
+    return minicsActive_ && heldWeaponId() == "glock";
+}
+
+void Game::tryReload() {
+    if (!usesAmmo() || reloadTimer_ > 0.0f) return;
+    if (magAmmo_ >= magSize_) return;          // already topped off
+    if (reserveAmmo_ <= 0) {
+        showToast("NO SPARE MAGAZINES");
+        return;
+    }
+    reloadTimer_ = reloadDuration_;
+    recoilPitch_ = recoilYaw_ = 0.0f; // hands leave the sights for the reload
+    sfx("reload");
+}
+
+// The MiniCS arena loadout: a spare pistol near spawn and the enemy line
+// holding the north half. Called instead of the template's own placements so
+// Deathmatch (which shares minics_arena) keeps its melee duel-bots.
+void Game::placeMinicsEntities() {
+    auto place = [&](const char* id, glm::vec3 pos, float respawn = 0.0f) {
+        if (const EntityDef* def = content_.find(id)) world_.addEntity(*def, pos, respawn);
+    };
+    place("glock", {2.0f, 0.0f, 16.5f}, -1.0f); // spare pistol at the south spawn
+    // Neon pillar landmarks (also light cover) framing the mid lanes.
+    place("neon_pillar", {-6.5f, 0.0f, 0.0f});
+    place("neon_pillar", {6.5f, 0.0f, 0.0f});
+    place("neon_pillar", {0.0f, 0.0f, -18.5f});
+    // Five enemies spread across the north lanes and the mid platform edges.
+    place("minics_bot", {-8.0f, 0.0f, -12.0f});
+    place("minics_bot", {8.0f, 0.0f, -13.0f});
+    place("minics_bot", {0.0f, 0.0f, -16.5f});
+    place("minics_bot", {-12.0f, 0.0f, -4.0f});
+    place("minics_bot", {12.0f, 0.0f, -6.0f});
+}
+
+void Game::startMinicsRound() {
+    minicsActive_ = true;
+    minicsBrains_.clear();
+    scorePopups_.clear();
+    minicsScore_ = 0;
+    minicsKills_ = 0;
+    minicsResultNote_.clear();
+
+    // One brain per placed enemy; count them for the win condition.
+    int count = 0;
+    for (const WorldEntity& e : world_.entities()) {
+        if (e.defId != "minics_bot" || !e.active) continue;
+        MinicsEnemy brain;
+        brain.rng = 0x9E3779B9u ^ (e.id * 2654435761u + 1u);
+        brain.yaw = std::atan2(player_.pos.x - e.pos.x, -(player_.pos.z - e.pos.z));
+        brain.stateTimer = 0.4f + float(brain.rng % 100u) * 0.006f;
+        brain.strafeSign = (brain.rng & 1u) ? 1.0f : -1.0f;
+        minicsBrains_[e.id] = brain;
+        ++count;
+    }
+    minicsEnemiesTotal_ = minicsEnemiesAlive_ = count;
+
+    minicsPhase_ = MiniCSPhase::Countdown;
+    minicsPhaseTimer_ = 2.0f; // a short "GET READY" beat before the fight
+    minicsBannerTimer_ = 0.0f;
+
+    // Fresh magazine + reserve for the round; clear any carried recoil/reload.
+    magAmmo_ = magSize_;
+    reserveAmmo_ = 68;
+    reloadTimer_ = recoilPitch_ = recoilYaw_ = 0.0f;
+    playerHealth_ = playerHealthShown_ = 100.0f;
+    sinceDamaged_ = 999.0f;
+    controlHintTimer_ = 6.0;
+    sfx("windup_cue", 0.8f); // a low "get ready" tone
+}
+
+void Game::updateMinics(float dt) {
+    if (!minicsActive_) return;
+    minicsBannerTimer_ += dt;
+    switch (minicsPhase_) {
+    case MiniCSPhase::Countdown:
+        minicsPhaseTimer_ -= dt;
+        if (minicsPhaseTimer_ <= 0.0f) {
+            minicsPhase_ = MiniCSPhase::Live;
+            minicsPhaseTimer_ = kMinicsRoundSeconds;
+            minicsBannerTimer_ = 0.0f;
+            sfx("kill_confirm", 0.8f); // bright "go" tone as the fight starts
+        }
+        break;
+    case MiniCSPhase::Live: {
+        int alive = 0;
+        for (const WorldEntity& e : world_.entities()) {
+            if (e.defId == "minics_bot" && e.active) ++alive;
+        }
+        minicsEnemiesAlive_ = alive;
+        minicsPhaseTimer_ -= dt;
+        if (alive <= 0) minicsWin();
+        else if (minicsPhaseTimer_ <= 0.0f) minicsLose("THE CLOCK RAN OUT");
+        break;
+    }
+    case MiniCSPhase::Won:
+    case MiniCSPhase::Lost:
+        minicsPhaseTimer_ += dt; // seconds since the round ended (restart gate)
+        break;
+    }
+}
+
+void Game::minicsWin() {
+    if (minicsPhase_ != MiniCSPhase::Live) return;
+    int timeBonus = int(std::max(0.0f, minicsPhaseTimer_) * 10.0f); // reward speed
+    minicsScore_ += timeBonus;
+    minicsResultNote_ = "ALL ENEMIES ELIMINATED";
+    minicsPhase_ = MiniCSPhase::Won;
+    minicsPhaseTimer_ = 0.0f; // now counts up (restart cooldown)
+    minicsBannerTimer_ = 0.0f;
+    sfx("round_win");
+}
+
+void Game::minicsLose(const char* reason) {
+    if (minicsPhase_ != MiniCSPhase::Live) return;
+    minicsResultNote_ = reason ? reason : "";
+    minicsPhase_ = MiniCSPhase::Lost;
+    minicsPhaseTimer_ = 0.0f;
+    minicsBannerTimer_ = 0.0f;
+    damageFlash_ = 0.9f;
+    triggerShake(1.0f, 0.5f);
+    sfx("round_lose");
+}
+
+void Game::onMinicsEnemyKilled(const glm::vec3& at) {
+    minicsKills_ += 1;
+    minicsScore_ += 100;
+    killMarkerTimer_ = 0.30f; // bigger crosshair X takes over from the hit tick
+    hitMarkerTimer_ = 0.0f;
+    sfx("kill_confirm");
+    // A hot burst where the enemy fell + a floating "+100" near the crosshair.
+    addSparks(at + glm::vec3(0.0f, 0.9f, 0.0f), 16, {1.0f, 0.5f, 0.22f});
+    addSparks(at + glm::vec3(0.0f, 1.2f, 0.0f), 8, {1.0f, 0.85f, 0.4f});
+    addScorePopup("+100", {1.0f, 0.9f, 0.4f});
+    triggerShake(0.25f, 0.12f);
+}
+
+void Game::addScorePopup(std::string text, const glm::vec3& color) {
+    ScorePopup p;
+    p.text = std::move(text);
+    p.color = color;
+    p.life = p.total = 1.1f;
+    p.driftX = (rand01() - 0.5f) * 44.0f;
+    scorePopups_.push_back(std::move(p));
+}
+
+// Deliberately small ranged brain: advance to a firing range, strafe to stay
+// hard to hit, pause to aim (a readable telegraph), fire one shot, repeat.
+// No pathfinding - enemies move in straight lines, slide off walls, and settle
+// onto whatever is underfoot. Movement mutates positions through stable ids.
+void Game::updateMinicsEnemies(float dt) {
+    if (!minicsActive_ || minicsPhase_ != MiniCSPhase::Live) return;
+    const glm::vec3 playerEye = eyePosition();
+
+    std::vector<unsigned> ids;
+    ids.reserve(minicsBrains_.size());
+    for (const auto& kv : minicsBrains_) ids.push_back(kv.first);
+
+    for (unsigned id : ids) {
+        WorldEntity* e = world_.entityById(id);
+        auto it = minicsBrains_.find(id);
+        if (!e || !e->active || it == minicsBrains_.end()) continue;
+        MinicsEnemy& b = it->second;
+        auto roll = [&b]() {
+            b.rng ^= b.rng << 13; b.rng ^= b.rng >> 17; b.rng ^= b.rng << 5;
+            return b.rng;
+        };
+        auto rf = [&]() { return float(roll() % 10000u) / 10000.0f; };
+
+        b.fireCooldown = std::max(0.0f, b.fireCooldown - dt);
+        b.muzzle = std::max(0.0f, b.muzzle - dt);
+        b.stateTimer -= dt;
+
+        glm::vec3 chest = e->pos + glm::vec3(0.0f, e->size.y * 0.82f, 0.0f);
+        glm::vec3 toPlayer = player_.pos - e->pos;
+        toPlayer.y = 0.0f;
+        float dist = glm::length(toPlayer);
+        glm::vec3 fwd = dist > 0.01f ? toPlayer / dist : glm::vec3(0, 0, 1);
+        glm::vec3 side(-fwd.z, 0.0f, fwd.x); // horizontal perpendicular
+
+        glm::vec3 toEye = playerEye - chest;
+        float eyeDist = glm::length(toEye);
+        glm::vec3 eyeDir = eyeDist > 0.01f ? toEye / eyeDist : fwd;
+        bool los = world_.raycastGeometry(chest, eyeDir, eyeDist) >= eyeDist - 0.3f;
+
+        float desiredYaw = std::atan2(toPlayer.x, -toPlayer.z);
+
+        using State = MinicsEnemy::State;
+        if (b.flinchTimer > 0.0f) {
+            b.flinchTimer -= dt;
+            b.state = State::Flinch;
+        } else {
+            switch (b.state) {
+            case State::Flinch:
+                b.state = State::Advance;
+                break;
+            case State::Advance:
+                if (los && dist <= kMinicsEngageMax && dist >= kMinicsEngageMin &&
+                    b.fireCooldown <= 0.0f) {
+                    b.state = State::Aim;
+                    b.stateTimer = 0.32f + rf() * 0.22f;
+                } else if (los && dist < kMinicsEngageMin) {
+                    b.state = State::Strafe;
+                    b.stateTimer = 0.5f + rf() * 0.5f;
+                }
+                break;
+            case State::Strafe:
+                if (b.stateTimer <= 0.0f) {
+                    if (los && b.fireCooldown <= 0.0f && dist <= kMinicsEngageMax) {
+                        b.state = State::Aim;
+                        b.stateTimer = 0.32f + rf() * 0.22f;
+                    } else if (!los || dist > kMinicsEngageMax) {
+                        b.state = State::Advance;
+                    } else {
+                        b.strafeSign = -b.strafeSign;
+                        b.stateTimer = 0.5f + rf() * 0.6f;
+                    }
+                }
+                break;
+            case State::Aim:
+                if (b.stateTimer <= 0.0f) b.state = los ? State::Fire : State::Advance;
+                break;
+            case State::Fire:
+                minicsEnemyFire(*e);
+                b.fireCooldown = 0.85f + rf() * 0.95f;
+                b.muzzle = 0.07f;
+                b.strafeSign = rf() < 0.5f ? -1.0f : 1.0f;
+                b.state = State::Strafe;
+                b.stateTimer = 0.45f + rf() * 0.6f;
+                break;
+            }
+        }
+
+        // Movement per state (aiming/firing enemies hold still).
+        glm::vec3 move(0.0f);
+        float speed = 0.0f;
+        bool aiming = (b.state == State::Aim || b.state == State::Fire);
+        if (b.flinchTimer <= 0.0f && !aiming) {
+            if (b.state == State::Advance) {
+                move = fwd + side * b.strafeSign * 0.4f;
+                speed = 3.1f;
+            } else if (b.state == State::Strafe) {
+                move = side * b.strafeSign;
+                if (dist < kMinicsEngageMin) move -= fwd * 0.8f;
+                else if (dist > kMinicsEngageMax) move += fwd * 0.8f;
+                speed = 2.5f;
+            }
+        }
+        if (speed > 0.0f && glm::length(move) > 0.01f) {
+            move = glm::normalize(move);
+            float stepLen = speed * dt;
+            glm::vec3 probe = e->pos + glm::vec3(0.0f, 0.6f, 0.0f);
+            float wall = world_.raycastGeometry(probe, move, stepLen + 0.5f);
+            if (wall > stepLen + 0.45f) {
+                glm::vec3 next = e->pos + move * stepLen;
+                next.x = glm::clamp(next.x, -16.6f, 16.6f);
+                next.z = glm::clamp(next.z, -20.6f, 20.6f);
+                glm::vec3 from = next + glm::vec3(0.0f, 1.0f, 0.0f);
+                float down = world_.raycastGeometry(from, glm::vec3(0, -1, 0), 3.0f);
+                if (down < 3.0f) next.y = from.y - down + 0.005f;
+                e->pos = next;
+                b.walkPhase += speed * 1.7f * dt;
+                b.walkAmt += (1.0f - b.walkAmt) * std::min(1.0f, 8.0f * dt);
+            } else {
+                // Wall/cover ahead: sidestep around it instead of grinding in.
+                if (b.state == State::Advance) {
+                    b.state = State::Strafe;
+                    b.stateTimer = 0.4f + rf() * 0.4f;
+                }
+                b.strafeSign = -b.strafeSign;
+                b.walkAmt += (0.0f - b.walkAmt) * std::min(1.0f, 8.0f * dt);
+            }
+        } else {
+            b.walkAmt += (0.0f - b.walkAmt) * std::min(1.0f, 8.0f * dt);
+        }
+
+        // Smooth facing + ease the aim pose.
+        float dyaw = desiredYaw - b.yaw;
+        while (dyaw > 3.14159265f) dyaw -= 6.2831853f;
+        while (dyaw < -3.14159265f) dyaw += 6.2831853f;
+        b.yaw += dyaw * std::min(1.0f, 9.0f * dt);
+        float aimTarget = aiming ? 1.0f : 0.0f;
+        b.aimBlend += (aimTarget - b.aimBlend) * std::min(1.0f, 9.0f * dt);
+    }
+}
+
+void Game::minicsEnemyFire(WorldEntity& e) {
+    auto bit = minicsBrains_.find(e.id);
+    if (bit == minicsBrains_.end()) return;
+    const MinicsEnemy& b = bit->second;
+    glm::vec3 facing(std::sin(b.yaw), 0.0f, -std::cos(b.yaw));
+    glm::vec3 muzzle = e.pos + glm::vec3(0.0f, 1.08f, 0.0f) + facing * 0.42f;
+
+    const glm::vec3 playerEye = eyePosition();
+    glm::vec3 toEye = playerEye - muzzle;
+    float dist = glm::length(toEye);
+    glm::vec3 dir = dist > 0.01f ? toEye / dist : facing;
+
+    // Accuracy falls off with range; a miss still whips a tracer past you so
+    // incoming fire is always legible (and adds pressure without the damage).
+    float acc = glm::clamp(0.90f - dist * 0.020f, 0.30f, 0.85f);
+    bool hit = rand01() < acc;
+
+    glm::vec3 impact = playerEye;
+    if (!hit) {
+        glm::vec3 right = glm::normalize(glm::cross(dir, glm::vec3(0, 1, 0)));
+        glm::vec3 up = glm::normalize(glm::cross(right, dir));
+        impact = playerEye + right * ((rand01() - 0.5f) * 2.2f) +
+                 up * ((rand01() - 0.5f) * 1.4f + 0.4f);
+    }
+
+    addSparks(muzzle, 3, {1.0f, 0.7f, 0.25f}); // muzzle flash puff
+    Tracer tr;
+    tr.from = muzzle;
+    tr.to = impact;
+    tr.color = {1.0f, 0.34f, 0.20f}; // red = incoming
+    tr.life = tr.total = std::max(0.02f, dist / 150.0f);
+    tr.impact = false; // no surface puff (it ends on/near the player)
+    tracers_.push_back(tr);
+    sfx("enemy_shot", 0.9f + rand01() * 0.16f);
+
+    if (hit) {
+        glm::vec3 toShooter = e.pos - player_.pos;
+        hurtAngle_ = std::atan2(toShooter.x, -toShooter.z) - yaw_; // screen-relative
+        hurtTimer_ = 0.85f;
+        damageFlash_ = std::max(damageFlash_, 0.5f);
+        triggerShake(0.4f, 0.16f);
+        damagePlayer(8.0f + rand01() * 5.0f);
+    }
+}
+
 void Game::update(const InputState& in, double frameDt, int viewportW, int viewportH) {
     menuTime_ += frameDt;
 
     if (in.escapePressed) goBack();
 
-    // B toggles the dev spawn menu, but only in a gameplay context (never
-    // while typing in a text field or sitting in the pause/main menus).
-    if (in.spawnMenuPressed && inGame_) {
+    // B toggles the dev spawn/build menu, and Tab the inventory - both are
+    // Sandbox features. Gun modes like MiniCS keep the player on the combat
+    // path and never open the sandbox tools.
+    if (in.spawnMenuPressed && inGame_ && sandboxMode_) {
         if (ui_ == UiScreen::None) {
             menuStatus_.clear();
             ui_ = UiScreen::SpawnMenu;
@@ -1464,7 +1911,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     }
 
     // Tab/I toggles the inventory/crafting screen in a gameplay context.
-    if (in.inventoryPressed && inGame_) {
+    if (in.inventoryPressed && inGame_ && sandboxMode_) {
         if (ui_ == UiScreen::None) {
             menuStatus_.clear();
             ui_ = UiScreen::Inventory;
@@ -1608,9 +2055,35 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     attackCooldown_ = std::max(0.0f, attackCooldown_ - dt);
     muzzleFlashTimer_ = std::max(0.0f, muzzleFlashTimer_ - dt);
     hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - dt);
+    killMarkerTimer_ = std::max(0.0f, killMarkerTimer_ - dt);
+    hurtTimer_ = std::max(0.0f, hurtTimer_ - dt);
     shakeTime_ = std::max(0.0f, shakeTime_ - dt);
     damageFlash_ = std::max(0.0f, damageFlash_ - dt * 1.8f);
     if (hudToastTimer_ > 0.0) hudToastTimer_ -= frameDt;
+
+    // Recoil recovery: the view-punch springs back toward the crosshair. Fast
+    // enough to feel snappy, slow enough that fast fire visibly climbs first.
+    float recover = std::min(1.0f, 11.0f * float(frameDt));
+    recoilPitch_ -= recoilPitch_ * recover;
+    recoilYaw_ -= recoilYaw_ * recover;
+
+    // Reload: the magazine refills from reserve when the animation completes.
+    if (reloadTimer_ > 0.0f) {
+        reloadTimer_ = std::max(0.0f, reloadTimer_ - float(frameDt));
+        if (reloadTimer_ == 0.0f) {
+            int need = magSize_ - magAmmo_;
+            int take = std::min(need, reserveAmmo_);
+            magAmmo_ += take;
+            reserveAmmo_ -= take;
+        }
+    }
+
+    // Score popups drift up and fade.
+    for (size_t i = 0; i < scorePopups_.size();) {
+        scorePopups_[i].life -= float(frameDt);
+        if (scorePopups_[i].life <= 0.0f) scorePopups_.erase(scorePopups_.begin() + long(i));
+        else ++i;
+    }
 
     // Health: slow regen once you have stayed out of trouble for a few
     // seconds (sandbox-friendly - a lost duel round is not a dead end),
@@ -1667,17 +2140,41 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
         lastEquippedId_ = inventory_.equippedId();
         equipTimer_ = kEquipDuration;
         muzzleFlashTimer_ = 0.0f;
+        recoilPitch_ = recoilYaw_ = 0.0f;
+        reloadTimer_ = 0.0f;
         if (playerMelee_.phase != melee::Phase::Stagger) {
             playerMelee_.phase = melee::Phase::Idle;
             playerMelee_.phaseLeft = playerMelee_.phaseTotal = 0.0f;
             playerMelee_.comboDepth = 0;
         }
+        // Raising a Glock racks a fresh magazine (and tops the reserve up).
+        if (usesAmmo()) {
+            magAmmo_ = magSize_;
+            reserveAmmo_ = std::max(reserveAmmo_, 68);
+        }
     }
     equipTimer_ = std::max(0.0f, equipTimer_ - float(frameDt));
+
+    // MiniCS round: an end screen (Won/Lost) takes over the inputs - a press
+    // restarts the round, ESC already popped to pause above. A short delay
+    // stops the winning/losing click from instantly restarting.
+    if (minicsActive_ &&
+        (minicsPhase_ == MiniCSPhase::Won || minicsPhase_ == MiniCSPhase::Lost)) {
+        updateMinics(dt);
+        updateSparks(dt);
+        bool press = in.attackPressed || in.jumpPressed || in.interactPressed ||
+                     in.feintPressed;
+        if (press && minicsPhaseTimer_ > 0.6f) {
+            if (const GameMode* m = gamemodes::find("minics")) startGameMode(*m);
+        }
+        return; // no combat, aim, or weapon handling on the end screen
+    }
 
     updateMelee(in, dt);      // stamina, attack phases, blocks, feints, throws
     updateBots(dt);           // duelist bot brains: telegraphs, strikes, guards
     updateMobs(dt);           // hostile mobs: chase + contact strikes
+    updateMinics(dt);         // MiniCS: countdown/round timer, win/lose
+    updateMinicsEnemies(dt);  // MiniCS enemy movement / aim / fire brains
     updateThrownWeapons(dt);  // thrown weapon arcs -> impacts -> pickups
     updateSparks(dt);
 
@@ -1686,6 +2183,9 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     if (in.slotPressed > 0 && inventory_.selectSlot(in.slotPressed - 1)) {
         itemInv_.equippedItemId.clear(); // slot keys return to sandbox weapons
     }
+    // R (or middle mouse) reloads while a Glock is in hand. In melee modes the
+    // same input is the feint, so it is only claimed here for gun weapons.
+    if (usesAmmo() && in.feintPressed) tryReload();
     if (in.interactPressed) tryInteract();
     if (in.attackPressed) tryAttack(); // hitscan only; melee ran in updateMelee
 }
@@ -1784,6 +2284,8 @@ void Game::activateButton(UiButton::Id id, int payload) {
         }
         saveCurrentWorld();
         currentWorldFile_.clear();
+        minicsActive_ = false; // end any MiniCS round cleanly on the way out
+        minicsBrains_.clear();
         inGame_ = false;
         ui_ = UiScreen::MainMenu;
         menuStatus_.clear();
@@ -2135,6 +2637,17 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
     frame.viewportW = viewportW;
     frame.viewportH = viewportH;
 
+    // Per-mode atmosphere: MiniCS (and Deathmatch, same map) get a dark neon
+    // dusk so the emissive accents, tracers and muzzle flashes glow; every
+    // other world keeps the daytime defaults baked into RenderFrame.
+    if (currentWorldType_ == "minics_arena") {
+        frame.skyTop = {0.04f, 0.05f, 0.11f};
+        frame.skyHorizon = {0.24f, 0.09f, 0.30f};
+        frame.fogColor = {0.10f, 0.07f, 0.16f};
+        frame.fogScale = 70.0f;
+        frame.fogMax = 0.55f;
+    }
+
     glm::vec3 playerRenderPos = player_.pos; // interpolated below; body draw uses it
     if (inGame_) {
         // Camera: interpolate between the last two ticks.
@@ -2150,8 +2663,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
                              std::sin(t * 53.7f + 4.2f)) *
                    f;
         }
-        glm::vec3 lookDir(std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_),
-                          -std::cos(yaw_) * std::cos(pitch_));
+        glm::vec3 lookDir = lookDirection(); // includes the recoil view-punch
         if (thirdPersonActive()) {
             // Boom camera: pull back along the look ray (slightly raised),
             // snubbed against geometry so walls never occlude the player.
@@ -2185,6 +2697,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         draw.size = wb.box.max - wb.box.min;
         draw.color = wb.color;
         draw.checkerTop = wb.checkerTop;
+        draw.emissive = wb.emissive; // neon/LED accent strips glow through fog
         frame.boxes.push_back(draw);
     }
 
@@ -2205,6 +2718,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
     for (size_t ei = 0; ei < world_.entities().size(); ++ei) {
         const WorldEntity& e = world_.entities()[ei];
         if (!e.active) continue; // picked up / destroyed, awaiting respawn
+        if (minicsBrains_.count(e.id)) continue; // MiniCS enemies draw animated
 
         glm::vec3 base = e.pos;
         bool isItemLike = !e.weaponId.empty() || !e.itemId.empty();
@@ -2243,7 +2757,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
             glm::mat4 group = vmCompose(glm::translate(glm::mat4(1.0f), base),
                                         glm::vec3(0.0f), {0.0f, spinDeg, 0.0f});
             for (const VisualPart& part : def->visual) {
-                obox(group, part.offset, {0, 0, 0}, part.size, part.color);
+                obox(group, part.offset, {0, 0, 0}, part.size, part.color, part.emissive);
             }
         } else if (def && !def->visual.empty()) {
             float entityH = std::max(0.2f, e.size.y);
@@ -2253,6 +2767,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
                 draw.center = base + part.offset + lean * (part.offset.y / entityH);
                 draw.size = part.size;
                 draw.color = glm::mix(part.color, glm::vec3(1.0f, 0.15f, 0.1f), flash);
+                draw.emissive = part.emissive; // glowing LED/neon parts
                 frame.boxes.push_back(draw);
             }
         } else {
@@ -2382,12 +2897,15 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         // A slim, long streak: thin enough that firing along your own view ray
         // reads as a dash instead of a fat square, long enough to survive the
         // near-parallel projection. A small bright head sells the "bullet".
-        obox(group, {0, 0, 0}, {0, 0, 0}, {0.03f, 0.03f, streak},
-             {1.0f, 0.92f, 0.60f}, 1.0f);
+        // The color is per-tracer: warm gold for the player, red for incoming.
+        obox(group, {0, 0, 0}, {0, 0, 0}, {0.03f, 0.03f, streak}, t.color, 1.0f);
+        glm::vec3 headCol = glm::mix(t.color, glm::vec3(1.0f), 0.5f);
         glm::mat4 headM = glm::translate(glm::mat4(1.0f), head);
-        obox(headM, {0, 0, 0}, {0, 0, 0}, {0.07f, 0.07f, 0.10f},
-             {1.0f, 0.97f, 0.80f}, 1.0f);
+        obox(headM, {0, 0, 0}, {0, 0, 0}, {0.07f, 0.07f, 0.10f}, headCol, 1.0f);
     }
+
+    // MiniCS enemies: animated (walk / aim / shoot / flinch) crimson soldiers.
+    if (minicsActive_) appendMinicsEnemyDraws(frame);
 
     if (uiActive()) {
         appendMenuDraws(frame);
@@ -2422,6 +2940,13 @@ void Game::appendHudDraws(RenderFrame& frame) const {
     if (damageFlash_ > 0.0f) {
         frame.rects.push_back({0.0f, 0.0f, float(viewportW), float(viewportH),
                                glm::vec4(0.85f, 0.10f, 0.08f, damageFlash_ * 0.38f)});
+    }
+
+    // MiniCS end screen owns the whole HUD (no crosshair, viewmodel, or bars).
+    if (minicsActive_ && (minicsPhase_ == MiniCSPhase::Won ||
+                          minicsPhase_ == MiniCSPhase::Lost)) {
+        appendMinicsHud(frame);
+        return;
     }
 
     if (settings_.showDebugHud) {
@@ -2595,7 +3120,7 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         if (sandboxMode_) {
             hint = "WASD MOVE   E INTERACT   LMB ATTACK   TAB INVENTORY   B BUILD MENU   ESC MENU";
         } else if (hw && hw->kind == WeaponKind::Hitscan) {
-            hint = "WASD MOVE   MOUSE AIM   LMB FIRE   1-9 WEAPONS   ESC MENU";
+            hint = "WASD MOVE   MOUSE AIM   LMB FIRE   R RELOAD   ESC MENU";
         } else {
             hint = "WASD MOVE   E INTERACT   LMB ATTACK   RMB BLOCK   ESC MENU";
         }
@@ -2659,17 +3184,23 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         frame.rects.push_back({sx, sy, sw * frac, sh, col});
     }
 
-    // Weapon bar: owned weapons with the equipped one bracketed.
-    std::string bar;
-    for (size_t i = 0; i < inventory_.weapons.size(); ++i) {
-        const WeaponDef* w = content_.findWeapon(inventory_.weapons[i]);
-        std::string name = toUpperAscii(w ? w->displayName : inventory_.weapons[i]);
-        bool eq = int(i) == inventory_.equipped;
-        if (!bar.empty()) bar += "   ";
-        bar += (eq ? "[" : "") + std::to_string(i + 1) + " " + name + (eq ? "]" : "");
+    // Weapon bar: owned weapons with the equipped one bracketed. MiniCS runs
+    // a single loadout and its own ammo HUD, so it hides the slot bar.
+    if (!minicsActive_) {
+        std::string bar;
+        for (size_t i = 0; i < inventory_.weapons.size(); ++i) {
+            const WeaponDef* w = content_.findWeapon(inventory_.weapons[i]);
+            std::string name = toUpperAscii(w ? w->displayName : inventory_.weapons[i]);
+            bool eq = int(i) == inventory_.equipped;
+            if (!bar.empty()) bar += "   ";
+            bar += (eq ? "[" : "") + std::to_string(i + 1) + " " + name + (eq ? "]" : "");
+        }
+        if (hasShield_) bar += "   + SHIELD";
+        centeredLine(viewportH - 46.0f, 2.0f, white, bar);
     }
-    if (hasShield_) bar += "   + SHIELD";
-    centeredLine(viewportH - 46.0f, 2.0f, white, bar);
+
+    // MiniCS combat HUD: ammo, round clock, score, banners, markers, popups.
+    if (minicsActive_) appendMinicsHud(frame);
 }
 
 // First-person hands + held weapon in real 3D: lit, oriented boxes in
@@ -2817,13 +3348,21 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
 
     if (weapon == "glock") {
         // Two-handed pistol held center-right. Recoil: the muzzle snaps up
-        // hard on the shot and settles fast (quadratic decay), the gun
-        // drives straight back a touch, and a hint of roll sells the torque.
+        // hard on the shot and settles fast (quadratic decay), the gun drives
+        // straight back a touch, and a hint of roll sells the torque. The
+        // accumulated view-punch (recoilPitch_) adds visible climb on fast
+        // fire. Reloading dips and tilts the gun while the magazine is swapped.
         float snap = kick * kick;
-        glm::mat4 gun = vmCompose(root,
-                                  glm::vec3(0.15f, -0.145f, -0.38f)
-                                      + glm::vec3(0.0f, snap * 0.014f, kick * 0.055f),
-                                  {snap * 17.0f - 2.0f, -4.0f, -2.0f - snap * 4.0f});
+        float rprog = reloadTimer_ > 0.0f ? 1.0f - reloadTimer_ / reloadDuration_ : 0.0f;
+        float reloadDip = reloadTimer_ > 0.0f ? std::sin(rprog * 3.14159265f) : 0.0f;
+        glm::vec3 gunPos = glm::vec3(0.15f, -0.145f, -0.38f)
+                           + glm::vec3(0.0f, snap * 0.014f, kick * 0.055f)
+                           + glm::vec3(-0.02f * reloadDip, -0.17f * reloadDip,
+                                       0.05f * reloadDip);
+        glm::mat4 gun = vmCompose(root, gunPos,
+                                  {snap * 17.0f + recoilPitch_ * 1.0f - 2.0f,
+                                   -4.0f - reloadDip * 8.0f,
+                                   -2.0f - snap * 4.0f - reloadDip * 26.0f});
         // Slide, top rib, sights, frame.
         box(gun, {0.0f, 0.043f, -0.055f}, {0, 0, 0}, {0.05f, 0.052f, 0.245f}, metalDark);
         box(gun, {0.0f, 0.072f, -0.055f}, {0, 0, 0}, {0.036f, 0.012f, 0.245f}, metalMid);
@@ -2844,12 +3383,25 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
         // Forearms.
         box(gun, {0.07f, -0.24f, 0.24f}, {50.0f, -10.0f, 0.0f}, {0.115f, 0.115f, 0.34f}, sleeve);
         box(gun, {-0.075f, -0.25f, 0.22f}, {50.0f, 12.0f, 0.0f}, {0.115f, 0.115f, 0.32f}, sleeve);
-        // Muzzle flash: emissive star while the timer runs.
+        // Reload: a fresh magazine drops out of the well (first half) then
+        // seats home (second half), read as the off hand swapping mags.
+        if (reloadTimer_ > 0.0f) {
+            float magDrop = rprog < 0.5f ? 0.14f * (rprog * 2.0f)
+                                         : 0.14f * (1.0f - (rprog - 0.5f) * 2.0f);
+            box(gun, {-0.02f, -0.16f - magDrop, 0.06f}, {-16.0f, 0, 0},
+                {0.05f, 0.14f, 0.07f}, metalMid);
+        }
+        // Muzzle flash: a bright emissive star that flares big on the shot and
+        // collapses to a white-hot core as the timer runs out.
         if (muzzleFlashTimer_ > 0.0f) {
-            box(gun, {0.0f, 0.043f, -0.225f}, {0, 0, 45.0f}, {0.055f, 0.055f, 0.06f},
-                {1.0f, 0.80f, 0.25f}, 1.0f);
-            box(gun, {0.0f, 0.043f, -0.235f}, {0, 0, 0}, {0.035f, 0.035f, 0.09f},
-                {1.0f, 0.95f, 0.70f}, 1.0f);
+            float f = muzzleFlashTimer_ / 0.07f;   // 1 -> 0 across the flash
+            float s = 0.65f + 0.5f * f;            // flares wide, then shrinks
+            box(gun, {0.0f, 0.043f, -0.235f}, {0, 0, 45.0f},
+                {0.085f * s, 0.085f * s, 0.05f}, {1.0f, 0.62f, 0.15f}, 1.0f); // amber petals
+            box(gun, {0.0f, 0.043f, -0.235f}, {0, 0, 0},
+                {0.06f * s, 0.06f * s, 0.05f}, {1.0f, 0.82f, 0.32f}, 1.0f);   // inner glow
+            box(gun, {0.0f, 0.043f, -0.255f}, {0, 0, 0},
+                {0.032f * s, 0.032f * s, 0.14f * s}, {1.0f, 0.97f, 0.85f}, 1.0f); // white-hot core
         }
     } else if (weapon == "karambit") {
         // Reverse grip: safety ring over the fist, claw blade hooking down
@@ -2957,6 +3509,193 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
         box(leg, {0.0f, 0.0f, 0.22f}, {0, 0, 0}, {0.15f, 0.15f, 0.46f}, sleeve); // shin
         box(leg, {0.0f, -0.02f, -0.07f}, {0, 0, 0}, {0.13f, 0.10f, 0.27f},
             {0.10f, 0.10f, 0.12f}); // boot
+    }
+}
+
+// MiniCS enemies, drawn procedurally so they can walk, aim, shoot and flinch
+// (the entity def's own visual is skipped for these - see buildRenderFrame).
+// Every part is a lit world-space box, same as the duelist telegraphs.
+void Game::appendMinicsEnemyDraws(RenderFrame& frame) const {
+    auto obox = [&frame](const glm::mat4& parent, glm::vec3 pos, glm::vec3 rotDeg,
+                         glm::vec3 size, glm::vec3 color, float emissive = 0.0f) {
+        ViewmodelBoxDraw d;
+        d.transform = glm::scale(vmCompose(parent, pos, rotDeg), size);
+        d.color = color;
+        d.emissive = emissive;
+        frame.orientedBoxes.push_back(d);
+    };
+
+    const glm::vec3 vest{0.80f, 0.22f, 0.20f};
+    const glm::vec3 vestDark{0.60f, 0.16f, 0.15f};
+    const glm::vec3 gear{0.20f, 0.21f, 0.24f};
+    const glm::vec3 skin{0.86f, 0.68f, 0.54f};
+    const glm::vec3 gunCol{0.11f, 0.11f, 0.13f};
+
+    for (const auto& kv : minicsBrains_) {
+        const WorldEntity* e = world_.entityById(kv.first);
+        if (!e || !e->active) continue;
+        const MinicsEnemy& b = kv.second;
+
+        float legSwing = std::sin(b.walkPhase) * 24.0f * b.walkAmt;
+        float bodyBob = std::abs(std::sin(b.walkPhase)) * 0.05f * b.walkAmt;
+        float flinch = glm::clamp(b.flinchTimer / 0.22f, 0.0f, 1.0f);
+        float hitFlash = glm::clamp(e->hitFlash / 0.15f, 0.0f, 1.0f);
+        float lean = -flinch * 15.0f; // reel backward when struck
+        glm::vec3 tint = glm::mix(glm::vec3(1.0f), glm::vec3(1.0f, 0.28f, 0.22f), hitFlash);
+        auto C = [&](glm::vec3 c) { return c * tint; };
+
+        glm::vec3 base = e->pos + glm::vec3(0.0f, bodyBob, 0.0f);
+        glm::mat4 group = vmCompose(glm::translate(glm::mat4(1.0f), base),
+                                    glm::vec3(0.0f), {lean, glm::degrees(b.yaw), 0.0f});
+
+        // Legs (swing in opposite phase), torso, belt, shoulders, head, helmet.
+        obox(group, {-0.16f, 0.36f, 0.0f}, {legSwing, 0, 0}, {0.20f, 0.72f, 0.24f}, C(gear));
+        obox(group, {0.16f, 0.36f, 0.0f}, {-legSwing, 0, 0}, {0.20f, 0.72f, 0.24f}, C(gear));
+        obox(group, {0.0f, 0.74f, 0.0f}, {0, 0, 0}, {0.54f, 0.12f, 0.36f}, C(gear));
+        obox(group, {0.0f, 1.04f, 0.0f}, {0, 0, 0}, {0.52f, 0.66f, 0.34f}, C(vest));
+        obox(group, {0.0f, 1.32f, 0.0f}, {0, 0, 0}, {0.60f, 0.16f, 0.40f}, C(vestDark));
+        obox(group, {0.0f, 1.58f, 0.0f}, {0, 0, 0}, {0.28f, 0.30f, 0.28f}, C(skin));
+        obox(group, {0.0f, 1.73f, 0.0f}, {0, 0, 0}, {0.31f, 0.11f, 0.31f}, C(gear));
+
+        // Arms + pistol. Aiming raises both arms level and pushes the gun
+        // forward (local -Z, which faces the player); at rest they hang lower.
+        float aim = b.aimBlend;
+        float armPitch = glm::mix(28.0f, 82.0f, aim);
+        float armZ = glm::mix(0.02f, -0.12f, aim);
+        obox(group, {-0.30f, 1.14f, armZ}, {armPitch, 0, 0}, {0.13f, 0.42f, 0.15f}, C(vestDark));
+        obox(group, {0.30f, 1.14f, armZ}, {armPitch, 0, 0}, {0.13f, 0.42f, 0.15f}, C(vestDark));
+
+        float gunY = glm::mix(0.96f, 1.15f, aim);
+        float gunZ = glm::mix(-0.30f, -0.54f, aim);
+        glm::mat4 gun = vmCompose(group, {0.17f, gunY, gunZ}, {0, 0, 0});
+        obox(gun, {0.0f, 0.02f, 0.0f}, {0, 0, 0}, {0.07f, 0.10f, 0.26f}, gunCol); // slide
+        obox(gun, {0.0f, -0.10f, 0.05f}, {0, 0, 0}, {0.06f, 0.12f, 0.06f}, gunCol); // grip
+        if (b.muzzle > 0.0f) { // muzzle flash on the shot
+            obox(gun, {0.0f, 0.02f, -0.20f}, {0, 0, 45.0f}, {0.09f, 0.09f, 0.07f},
+                 {1.0f, 0.82f, 0.30f}, 1.0f);
+        }
+    }
+}
+
+// MiniCS combat HUD: ammo, round clock + enemies, score, the countdown/FIGHT
+// banners, floating score popups, the kill marker, a directional damage
+// indicator, and the win/loss end screen. Drawn over the shared HUD.
+void Game::appendMinicsHud(RenderFrame& frame) const {
+    const int vw = frame.viewportW, vh = frame.viewportH;
+    const float cx = vw * 0.5f, cy = vh * 0.5f;
+    const glm::vec4 white(1, 1, 1, 1);
+    char buf[128];
+
+    auto text = [&](float x, float y, float sc, glm::vec4 col, std::string s,
+                    bool center = false) {
+        TextDraw t;
+        t.x = x; t.y = y; t.scale = sc; t.color = col; t.centered = center;
+        t.text = std::move(s);
+        frame.texts.push_back(std::move(t));
+    };
+
+    // --- End screen (Won / Lost): a dim overlay with the result + restart.
+    if (minicsPhase_ == MiniCSPhase::Won || minicsPhase_ == MiniCSPhase::Lost) {
+        bool won = minicsPhase_ == MiniCSPhase::Won;
+        frame.rects.push_back({0, 0, float(vw), float(vh),
+                               glm::vec4(0.04f, 0.06f, 0.09f, 0.62f)});
+        glm::vec4 head = won ? glm::vec4(0.45f, 1.0f, 0.55f, 1.0f)
+                             : glm::vec4(1.0f, 0.40f, 0.34f, 1.0f);
+        text(cx, vh * 0.24f, 6.5f, head, won ? "VICTORY" : "DEFEAT", true);
+        frame.rects.push_back({cx - 150.0f, vh * 0.24f + 58.0f, 300.0f, 3.0f, head});
+        text(cx, vh * 0.24f + 74.0f, 2.0f, glm::vec4(0.82f, 0.86f, 0.92f, 1.0f),
+             minicsResultNote_, true);
+        std::snprintf(buf, sizeof(buf), "ENEMIES ELIMINATED   %d / %d", minicsKills_,
+                      minicsEnemiesTotal_);
+        text(cx, vh * 0.45f, 2.4f, white, buf, true);
+        std::snprintf(buf, sizeof(buf), "SCORE   %d", minicsScore_);
+        text(cx, vh * 0.45f + 36.0f, 2.6f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), buf, true);
+        if (minicsPhaseTimer_ > 0.6f) {
+            float a = 0.6f + 0.4f * std::sin(float(menuTime_) * 5.0f);
+            text(cx, vh * 0.64f, 2.6f, glm::vec4(1, 1, 1, a),
+                 "FIRE OR SPACE  -  PLAY AGAIN", true);
+            text(cx, vh * 0.64f + 34.0f, 2.0f, glm::vec4(0.75f, 0.8f, 0.85f, 1.0f),
+                 "ESC  -  MENU", true);
+        }
+        return;
+    }
+
+    // --- Ammo block, bottom-right: big magazine count over a small reserve.
+    {
+        float ax = vw - 196.0f, ay = vh - 78.0f;
+        frame.rects.push_back({ax - 18.0f, ay - 14.0f, 190.0f, 62.0f,
+                               glm::vec4(0.05f, 0.07f, 0.10f, 0.45f)});
+        glm::vec4 magCol = magAmmo_ == 0 ? glm::vec4(0.96f, 0.30f, 0.24f, 1.0f)
+                           : magAmmo_ <= 5 ? glm::vec4(0.98f, 0.76f, 0.30f, 1.0f)
+                                           : white;
+        std::snprintf(buf, sizeof(buf), "%d", magAmmo_);
+        text(ax, ay - 8.0f, 4.8f, magCol, buf);
+        std::snprintf(buf, sizeof(buf), "/ %d", reserveAmmo_);
+        text(ax + 92.0f, ay + 18.0f, 2.2f, glm::vec4(0.72f, 0.78f, 0.85f, 1.0f), buf);
+        if (reloadTimer_ > 0.0f) {
+            text(ax + 6.0f, ay - 34.0f, 2.0f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), "RELOADING");
+        }
+    }
+    if (reloadTimer_ <= 0.0f && magAmmo_ == 0 && reserveAmmo_ > 0) {
+        float a = 0.6f + 0.4f * std::sin(float(menuTime_) * 8.0f);
+        text(cx, vh * 0.63f, 2.6f, glm::vec4(1.0f, 0.85f, 0.3f, a), "PRESS R TO RELOAD", true);
+    }
+
+    // --- Round clock + enemies remaining, top-center; score top-left.
+    float remain = minicsPhase_ == MiniCSPhase::Live ? std::max(0.0f, minicsPhaseTimer_)
+                                                     : kMinicsRoundSeconds;
+    std::snprintf(buf, sizeof(buf), "%d:%02d", int(remain) / 60, int(remain) % 60);
+    text(cx, 16.0f, 3.2f, remain <= 10.0f ? glm::vec4(0.98f, 0.35f, 0.28f, 1.0f) : white,
+         buf, true);
+    std::snprintf(buf, sizeof(buf), "ENEMIES  %d / %d", minicsEnemiesAlive_,
+                  minicsEnemiesTotal_);
+    text(cx, 56.0f, 2.0f, glm::vec4(0.92f, 0.62f, 0.55f, 1.0f), buf, true);
+    std::snprintf(buf, sizeof(buf), "SCORE  %d", minicsScore_);
+    text(16.0f, 14.0f, 2.4f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), buf);
+
+    // --- Countdown / FIGHT banners.
+    if (minicsPhase_ == MiniCSPhase::Countdown) {
+        text(cx, vh * 0.33f, 3.2f, glm::vec4(0.7f, 0.85f, 1.0f, 1.0f), "GET READY", true);
+        std::snprintf(buf, sizeof(buf), "%d", std::max(1, int(std::ceil(minicsPhaseTimer_))));
+        text(cx, vh * 0.40f, 6.5f, white, buf, true);
+        text(cx, vh * 0.52f, 2.0f, glm::vec4(0.8f, 0.85f, 0.9f, 1.0f),
+             "ELIMINATE ALL ENEMIES", true);
+    } else if (minicsPhase_ == MiniCSPhase::Live && minicsBannerTimer_ < 1.1f) {
+        float a = 1.0f - minicsBannerTimer_ / 1.1f;
+        text(cx, vh * 0.35f, 5.0f, glm::vec4(1.0f, 0.95f, 0.5f, a), "FIGHT!", true);
+    }
+
+    // --- Kill marker: a bigger, brighter red X over the crosshair.
+    if (killMarkerTimer_ > 0.0f) {
+        float k = killMarkerTimer_ / 0.30f;
+        float r = 15.0f + (1.0f - k) * 5.0f; // expands slightly as it fades
+        glm::vec4 col(1.0f, 0.28f, 0.24f, glm::clamp(k + 0.2f, 0.0f, 1.0f));
+        for (float sx : {-1.0f, 1.0f}) {
+            for (float sy : {-1.0f, 1.0f}) {
+                frame.rects.push_back({cx + sx * r - 3.0f, cy + sy * r - 3.0f, 6.0f, 6.0f, col});
+            }
+        }
+    }
+
+    // --- Directional damage indicator: a red arc toward the last shooter.
+    if (hurtTimer_ > 0.0f) {
+        float a = glm::clamp(hurtTimer_ / 0.85f, 0.0f, 1.0f) * 0.85f;
+        const float R = 52.0f;
+        for (int i = -2; i <= 2; ++i) {
+            float ang = hurtAngle_ + float(i) * 0.10f;
+            float px = cx + std::sin(ang) * R;
+            float py = cy - std::cos(ang) * R;
+            frame.rects.push_back({px - 4.0f, py - 4.0f, 8.0f, 8.0f,
+                                   glm::vec4(1.0f, 0.25f, 0.2f, a)});
+        }
+    }
+
+    // --- Floating score popups, rising and fading near the crosshair.
+    for (const ScorePopup& p : scorePopups_) {
+        float k = p.life / p.total;
+        float y = cy - 52.0f - (1.0f - k) * 46.0f;
+        text(cx + p.driftX, y, 2.6f, glm::vec4(p.color, glm::clamp(k * 1.4f, 0.0f, 1.0f)),
+             p.text, true);
     }
 }
 

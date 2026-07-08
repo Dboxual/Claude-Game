@@ -14,6 +14,7 @@ struct BoxDraw {
     glm::vec3 size{1.0f};
     glm::vec3 color{1.0f};
     bool checkerTop = false;
+    float emissive = 0.0f; // 0 = lit surface, 1 = full-bright (neon/LED props)
 };
 
 // Oriented box with a full model matrix. Used two ways:
@@ -54,6 +55,16 @@ struct RenderFrame {
     glm::mat4 viewmodelProj{1.0f}; // fixed-FOV projection for viewmodelBoxes
     int viewportW = 0;
     int viewportH = 0;
+
+    // Atmosphere, set per frame by the game so each mode themes its own look
+    // (defaults reproduce the original daytime sky). The renderer draws a
+    // vertical gradient from skyTop (zenith) to skyHorizon, and the world
+    // shader fades distant geometry toward fogColor. Emissive boxes ignore fog.
+    glm::vec3 skyTop{0.33f, 0.47f, 0.68f};
+    glm::vec3 skyHorizon{0.58f, 0.68f, 0.77f};
+    glm::vec3 fogColor{0.55f, 0.65f, 0.75f};
+    float fogScale = 140.0f; // world distance divisor: larger = fog farther out
+    float fogMax = 0.35f;    // maximum fog blend (0..1)
     std::vector<BoxDraw> boxes;
     std::vector<ViewmodelBoxDraw> orientedBoxes; // world-space rotated boxes (fx, telegraphs)
     std::vector<ViewmodelBoxDraw> viewmodelBoxes; // first-person hands/weapon

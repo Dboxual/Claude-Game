@@ -36,7 +36,10 @@ in vec3 vNormal;
 in vec3 vWorldPos;
 uniform vec3 uColor;
 uniform int uChecker;
-uniform float uEmissive; // 1 = unlit (muzzle flash); world boxes pass 0
+uniform float uEmissive;  // 1 = unlit/full-bright (muzzle flash, neon props)
+uniform vec3 uFogColor;   // distant geometry fades toward this
+uniform float uFogScale;  // world-distance divisor (larger = fog farther out)
+uniform float uFogMax;    // maximum fog blend
 out vec4 fragColor;
 void main() {
     vec3 n = normalize(vNormal);
@@ -46,9 +49,9 @@ void main() {
         float c = mod(floor(vWorldPos.x) + floor(vWorldPos.z), 2.0);
         col *= (c < 0.5) ? 0.82 : 1.08;
     }
-    float fog = clamp(length(vWorldPos) / 140.0, 0.0, 0.35);
-    col = mix(col, vec3(0.55, 0.65, 0.75), fog);
-    col = mix(col, uColor, uEmissive);
+    float fog = clamp(length(vWorldPos) / uFogScale, 0.0, uFogMax);
+    col = mix(col, uFogColor, fog);
+    col = mix(col, uColor, uEmissive); // emissive wins over shading + fog
     fragColor = vec4(col, 1.0);
 }
 )GLSL";
@@ -193,6 +196,9 @@ bool GLRenderer::init(IWindow& window) {
     locColor_ = glGetUniformLocation(worldProg_, "uColor");
     locChecker_ = glGetUniformLocation(worldProg_, "uChecker");
     locEmissive_ = glGetUniformLocation(worldProg_, "uEmissive");
+    locFogColor_ = glGetUniformLocation(worldProg_, "uFogColor");
+    locFogScale_ = glGetUniformLocation(worldProg_, "uFogScale");
+    locFogMax_ = glGetUniformLocation(worldProg_, "uFogMax");
 
     glGenVertexArrays(1, &cubeVao_);
     glGenBuffers(1, &cubeVbo_);
@@ -341,8 +347,8 @@ void GLRenderer::writePendingScreenshot(int w, int h) {
 void GLRenderer::drawSky(const RenderFrame& frame) {
     const float w = float(frame.viewportW);
     const float h = float(frame.viewportH);
-    const float t[4] = {0.33f, 0.47f, 0.68f, 1.0f}; // zenith
-    const float b[4] = {0.58f, 0.68f, 0.77f, 1.0f}; // horizon, matches the fog
+    const float t[4] = {frame.skyTop.r, frame.skyTop.g, frame.skyTop.b, 1.0f};       // zenith
+    const float b[4] = {frame.skyHorizon.r, frame.skyHorizon.g, frame.skyHorizon.b, 1.0f}; // horizon
     const float verts[6][6] = {
         {0, 0, t[0], t[1], t[2], t[3]}, {w, 0, t[0], t[1], t[2], t[3]},
         {w, h, b[0], b[1], b[2], b[3]}, {0, 0, t[0], t[1], t[2], t[3]},
@@ -404,9 +410,12 @@ void GLRenderer::drawBoxes(const RenderFrame& frame) {
     glUseProgram(worldProg_);
     glUniformMatrix4fv(locProj_, 1, GL_FALSE, glm::value_ptr(frame.proj));
     glUniformMatrix4fv(locView_, 1, GL_FALSE, glm::value_ptr(frame.view));
+    // Per-frame atmosphere (the game themes these per mode).
+    glUniform3f(locFogColor_, frame.fogColor.r, frame.fogColor.g, frame.fogColor.b);
+    glUniform1f(locFogScale_, frame.fogScale);
+    glUniform1f(locFogMax_, frame.fogMax);
 
     glBindVertexArray(cubeVao_);
-    glUniform1f(locEmissive_, 0.0f);
     for (const BoxDraw& box : frame.boxes) {
         glm::mat4 model = glm::scale(glm::translate(glm::mat4(1.0f), box.center), box.size);
         glm::mat3 normalMat = glm::inverseTranspose(glm::mat3(model));
@@ -414,6 +423,7 @@ void GLRenderer::drawBoxes(const RenderFrame& frame) {
         glUniformMatrix3fv(locNormalMat_, 1, GL_FALSE, glm::value_ptr(normalMat));
         glUniform3f(locColor_, box.color.r, box.color.g, box.color.b);
         glUniform1i(locChecker_, box.checkerTop ? 1 : 0);
+        glUniform1f(locEmissive_, box.emissive);
         glDrawArrays(GL_TRIANGLES, 0, 36);
     }
 

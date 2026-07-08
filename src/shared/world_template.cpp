@@ -8,8 +8,15 @@ namespace {
 // Small builders so each template reads as a layout, not a wall of vectors.
 
 void box(std::vector<WorldBox>& v, glm::vec3 mn, glm::vec3 mx, glm::vec3 color,
-         bool checkerTop = false) {
-    v.push_back(WorldBox{AABB{mn, mx}, color, checkerTop});
+         bool checkerTop = false, float emissive = 0.0f) {
+    v.push_back(WorldBox{AABB{mn, mx}, color, checkerTop, emissive});
+}
+
+// A full-bright neon/LED accent strip. Thin and flush (or high on a wall) so it
+// reads as a glowing light, not gameplay geometry - collision is technically
+// present but placed where it never affects movement or shots.
+void neon(std::vector<WorldBox>& v, glm::vec3 mn, glm::vec3 mx, glm::vec3 color) {
+    v.push_back(WorldBox{AABB{mn, mx}, color, false, 1.0f});
 }
 
 // Floor plate plus a 1 m-thick wall ring, half-extents (hx, hz) on the
@@ -37,10 +44,16 @@ const glm::vec3 kPillar{0.46f, 0.50f, 0.58f};
 const glm::vec3 kPlazaFloor{0.55f, 0.57f, 0.60f};
 const glm::vec3 kPlazaWall{0.44f, 0.46f, 0.52f};
 const glm::vec3 kPlazaAccent{0.60f, 0.50f, 0.38f};
-const glm::vec3 kCsFloor{0.52f, 0.49f, 0.43f};   // dusty concrete
-const glm::vec3 kCsWall{0.40f, 0.37f, 0.33f};
-const glm::vec3 kCsCover{0.47f, 0.44f, 0.39f};   // crates / low walls
-const glm::vec3 kCsRamp{0.44f, 0.46f, 0.50f};
+// MiniCS goes for a dark neon look: a cool charcoal shell so the emissive
+// cyan/magenta/amber accents (and the crimson enemies) pop hard against it.
+const glm::vec3 kCsFloor{0.17f, 0.18f, 0.23f};   // dark cool concrete
+const glm::vec3 kCsWall{0.12f, 0.13f, 0.18f};    // near-black slate
+const glm::vec3 kCsCover{0.20f, 0.21f, 0.27f};   // crates / low walls
+const glm::vec3 kCsRamp{0.16f, 0.19f, 0.26f};
+const glm::vec3 kNeonCyan{0.15f, 0.95f, 1.0f};
+const glm::vec3 kNeonMagenta{1.0f, 0.20f, 0.75f};
+const glm::vec3 kNeonAmber{1.0f, 0.62f, 0.12f};
+const glm::vec3 kNeonLime{0.55f, 1.0f, 0.30f};
 const glm::vec3 kPitFloor{0.30f, 0.33f, 0.30f};  // grim survival pit
 const glm::vec3 kPitWall{0.22f, 0.24f, 0.24f};
 const glm::vec3 kPitAccent{0.36f, 0.30f, 0.26f};
@@ -154,7 +167,7 @@ WorldTemplate minicsArena() {
     WorldTemplate t;
     t.id = "minics_arena";
     t.displayName = "MiniCS Arena";
-    t.description = "Compact competitive FPS arena with crate cover and a mid.";
+    t.description = "Compact neon FPS arena: charcoal shell, LED lanes, crate cover.";
     // 36 x 44 walled arena; players push from the south, bots hold the north.
     enclose(t.boxes, 18.0f, 22.0f, 5.0f, kCsFloor, kCsWall, false);
 
@@ -162,6 +175,11 @@ WorldTemplate minicsArena() {
     box(t.boxes, {-4.0f, 0.0f, -3.0f}, {4.0f, 1.2f, 3.0f}, kCsRamp, true);
     box(t.boxes, {-4.0f, 0.0f, 3.0f}, {4.0f, 0.4f, 5.0f}, kCsRamp, true);   // ramp lip up
     box(t.boxes, {-4.0f, 0.0f, 5.0f}, {4.0f, 0.8f, 6.5f}, kCsRamp, true);
+    // Amber LED rim glowing along the top edge of the mid platform.
+    neon(t.boxes, {-4.05f, 1.16f, -3.05f}, {4.05f, 1.24f, -2.9f}, kNeonAmber);
+    neon(t.boxes, {-4.05f, 1.16f, 2.9f}, {4.05f, 1.24f, 3.05f}, kNeonAmber);
+    neon(t.boxes, {-4.05f, 1.16f, -3.0f}, {-3.9f, 1.24f, 3.0f}, kNeonAmber);
+    neon(t.boxes, {3.9f, 1.16f, -3.0f}, {4.05f, 1.24f, 3.0f}, kNeonAmber);
 
     // Crate cover clusters (jumpable, breakable sightlines) around the arena.
     box(t.boxes, {-11.0f, 0.0f, 8.0f}, {-9.0f, 1.2f, 10.0f}, kCsCover, true);
@@ -173,10 +191,34 @@ WorldTemplate minicsArena() {
     box(t.boxes, {13.0f, 0.0f, -2.0f}, {14.5f, 2.2f, 4.0f}, kCsWall);          // side wall bit
     box(t.boxes, {-14.5f, 0.0f, -2.0f}, {-13.0f, 2.2f, 4.0f}, kCsWall);
 
+    // Wall-top LED strips near the top of each wall (high up, purely visual):
+    // cyan down the long sides, magenta across the ends. This is what gives the
+    // arena its neon identity and a bright horizon line through the fog.
+    const float wy0 = 4.3f, wy1 = 4.6f;
+    neon(t.boxes, {-18.0f, wy0, -22.02f}, {18.0f, wy1, -21.98f}, kNeonMagenta); // north
+    neon(t.boxes, {-18.0f, wy0, 21.98f}, {18.0f, wy1, 22.02f}, kNeonMagenta);   // south
+    neon(t.boxes, {-18.02f, wy0, -22.0f}, {-17.98f, wy1, 22.0f}, kNeonCyan);    // west
+    neon(t.boxes, {17.98f, wy0, -22.0f}, {18.02f, wy1, 22.0f}, kNeonCyan);      // east
+
+    // Floor LED lane lines: a cyan centre lane guiding the push north, plus two
+    // magenta flank lines. Flush to the floor (2 cm), so no collision matters.
+    neon(t.boxes, {-0.15f, 0.0f, -12.0f}, {0.15f, 0.02f, 14.0f}, kNeonCyan);    // centre
+    neon(t.boxes, {-9.15f, 0.0f, -10.0f}, {-8.85f, 0.02f, 12.0f}, kNeonMagenta); // west flank
+    neon(t.boxes, {8.85f, 0.0f, -10.0f}, {9.15f, 0.02f, 12.0f}, kNeonMagenta);  // east flank
+    // A lime start line at the south spawn.
+    neon(t.boxes, {-6.0f, 0.0f, 16.9f}, {6.0f, 0.02f, 17.1f}, kNeonLime);
+
     t.spawnPoint = {0.0f, 0.01f, 18.0f}; // south spawn, looking into the arena
 
-    // Loadout support: a spare pistol at spawn, and the opposition holding
-    // north. Duel bots move and pressure; dummies are extra targets to shoot.
+    // Neon pillar landmarks (also light cover) framing the mid lanes.
+    t.placements.push_back({"neon_pillar", {-6.5f, 0.0f, 0.0f}, 0.0f});
+    t.placements.push_back({"neon_pillar", {6.5f, 0.0f, 0.0f}, 0.0f});
+    t.placements.push_back({"neon_pillar", {0.0f, 0.0f, -18.5f}, 0.0f});
+
+    // Loadout support: a spare pistol at spawn; the ranged opposition holds the
+    // north. The MiniCS round loop (client) replaces these with minics_bot
+    // enemies + a spare Glock (Game::placeMinicsEntities); this list is what
+    // Deathmatch (which shares this map) uses.
     t.placements.push_back({"glock", {2.0f, 0.0f, 16.5f}, -1.0f});
     t.placements.push_back({"duel_bot", {-6.0f, 0.0f, -12.0f}, 12.0f});
     t.placements.push_back({"duel_bot", {6.0f, 0.0f, -13.0f}, 12.0f});

@@ -22,6 +22,7 @@ struct WorldBox {
     AABB box;
     glm::vec3 color{1.0f};
     bool checkerTop = false; // draw a checker pattern on upward faces
+    float emissive = 0.0f;   // 0 = lit, 1 = full-bright (neon/LED accent strips)
 };
 
 // Slab test: distance along the (normalized) ray to the box, or a negative

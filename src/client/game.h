@@ -175,6 +175,24 @@ private:
     void triggerShake(float amplitude, float seconds);
     void applyBotStrikeOnPlayer(melee::Actor& bot);
 
+    // --- MiniCS mode: the flagship round-based FPS loop. Every MiniCS path is
+    // gated on minicsActive_, so the sandbox and other modes stay untouched. --
+    void placeMinicsEntities();          // arena loadout: spare Glock + enemy spawns
+    void startMinicsRound();             // (re)scan enemies, reset round state
+    void updateMinics(float dt);         // round timer, countdown, win/lose
+    void updateMinicsEnemies(float dt);  // enemy movement / aim / fire brains
+    void minicsEnemyFire(WorldEntity& e); // one enemy shot at the player
+    void minicsWin();
+    void minicsLose(const char* reason);
+    void onMinicsEnemyKilled(const glm::vec3& at); // score + kill feedback
+    void addScorePopup(std::string text, const glm::vec3& color);
+    void appendMinicsEnemyDraws(RenderFrame& frame) const; // animated enemies
+    void appendMinicsHud(RenderFrame& frame) const;        // ammo/score/round HUD
+
+    // --- Glock feel: client-side ammo + a recovering recoil view-punch. -----
+    bool usesAmmo() const;               // true while a Glock is in hand
+    void tryReload();
+
     void loadContentFiles(); // server/content/ defs replace matching builtins
 
     std::vector<UiButton> buildMenuLayout(int viewportW, int viewportH) const;
@@ -285,11 +303,66 @@ private:
     struct Tracer {
         glm::vec3 from{0.0f};
         glm::vec3 to{0.0f};
+        glm::vec3 color{1.0f, 0.92f, 0.60f}; // player = warm gold, enemy = red
         float life = 0.0f;   // counts down; 0 = arrived
         float total = 0.06f; // travel time = distance / tracer speed
         bool impact = false; // ends on a surface: puff on arrival
     };
     std::vector<Tracer> tracers_;
+
+    // --- MiniCS round state (only meaningful while minicsActive_). -----------
+    enum class MiniCSPhase { Countdown, Live, Won, Lost };
+
+    // One ranged enemy's brain, keyed by the entity's stable id. The state
+    // drives BOTH the decision loop and the walk/aim/shoot/flinch animation.
+    struct MinicsEnemy {
+        enum class State { Advance, Strafe, Aim, Fire, Flinch };
+        State state = State::Advance;
+        float stateTimer = 0.0f;   // seconds until the next decision
+        float fireCooldown = 1.0f; // gate between shots
+        float flinchTimer = 0.0f;  // >0 = reeling from a hit (interrupts aim)
+        float aimBlend = 0.0f;     // 0..1 eased weapon-raise for the aim pose
+        float walkPhase = 0.0f;    // leg/torso walk-cycle phase
+        float walkAmt = 0.0f;      // 0..1 eased "am I moving" for the bob
+        float strafeSign = 1.0f;   // +1 / -1 current strafe side
+        float yaw = 0.0f;          // facing, radians (smoothed)
+        float muzzle = 0.0f;       // >0 = muzzle-flash / gun-recoil after firing
+        unsigned rng = 0x9E3779B9u;
+    };
+    std::unordered_map<unsigned, MinicsEnemy> minicsBrains_;
+
+    bool minicsActive_ = false;
+    MiniCSPhase minicsPhase_ = MiniCSPhase::Countdown;
+    float minicsPhaseTimer_ = 0.0f;   // countdown secs, then round secs remaining
+    float minicsBannerTimer_ = 0.0f;  // pulse for the "FIGHT" / result banner
+    int minicsScore_ = 0;
+    int minicsKills_ = 0;
+    int minicsEnemiesTotal_ = 0;
+    int minicsEnemiesAlive_ = 0;
+    std::string minicsResultNote_;    // end-screen subtitle (loss reason)
+    float killMarkerTimer_ = 0.0f;    // bigger crosshair X + kill confirm
+    float hurtTimer_ = 0.0f;          // directional damage indicator life
+    float hurtAngle_ = 0.0f;          // screen angle to the last damage source
+
+    // Floating score popups near the crosshair ("+100"), rise and fade.
+    struct ScorePopup {
+        std::string text;
+        glm::vec3 color{1.0f};
+        float life = 0.0f;
+        float total = 1.1f;
+        float driftX = 0.0f;
+    };
+    std::vector<ScorePopup> scorePopups_;
+
+    // Glock ammo + recoil. Ammo is client-side (a magazine + a reserve, a
+    // reload, and a dry-fire); recoil is a view-punch that recovers to zero.
+    int magAmmo_ = 0;
+    int reserveAmmo_ = 0;
+    int magSize_ = 17;
+    float reloadTimer_ = 0.0f;    // >0 = mid-reload (mag refills on completion)
+    float recoilPitch_ = 0.0f;    // degrees of view-punch up, recovers to 0
+    float recoilYaw_ = 0.0f;      // small horizontal kick, recovers to 0
+    float reloadDuration_ = 1.45f;
 
     // Feel-polish state: look sway, landing dip, first-spawn control hint.
     float swayX_ = 0.0f;            // smoothed horizontal look velocity

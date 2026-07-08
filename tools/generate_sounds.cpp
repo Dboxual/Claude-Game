@@ -326,6 +326,123 @@ std::vector<float> windupCue() {
     return buf;
 }
 
+// Reload: the mechanical sequence of a pistol reload - a mag-release click,
+// the mag seating with a firm clack, then the slide chambering a round. Three
+// short noise/tone transients spaced across ~0.55 s so it reads as "handling
+// the gun", the beat the reload animation plays over.
+std::vector<float> reload() {
+    auto buf = makeBuffer(0.60f);
+    Rng rng; OnePole lp;
+    auto tick = [&](float startS, float freq, float tau, float noiseAmp) {
+        size_t s0 = size_t(startS * kRate);
+        for (size_t i = s0; i < buf.size(); ++i) {
+            float t = float(i - s0) / kRate;
+            float body = std::sin(2 * 3.14159265f * freq * t) * envExp(t, tau);
+            float clack = lp.step(rng.next(), 2600.0f) * envExp(t, 0.006f) * noiseAmp;
+            buf[i] += std::tanh((body + clack) * 1.3f);
+        }
+    };
+    tick(0.00f, 240.0f, 0.020f, 0.7f); // mag release click
+    tick(0.22f, 150.0f, 0.035f, 0.9f); // mag seats: firm clack
+    tick(0.44f, 320.0f, 0.028f, 1.0f); // slide chambers a round
+    finalize(buf, 0.62f);
+    return buf;
+}
+
+// Dry fire: the flat, hollow click of the hammer falling on an empty chamber.
+// Deliberately unsatisfying - it means "you are out, reload".
+std::vector<float> dryFire() {
+    auto buf = makeBuffer(0.08f);
+    Rng rng; OnePole lp;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float clickBody = std::sin(2 * 3.14159265f * 900.0f * t) * envExp(t, 0.004f);
+        float snap = lp.step(rng.next(), 3200.0f) * envExp(t, 0.003f) * 0.8f;
+        buf[i] = (clickBody + snap);
+    }
+    finalize(buf, 0.42f);
+    return buf;
+}
+
+// Kill confirm: the reward chirp when a shot puts an enemy down - two quick
+// rising sine blips, bright and clean, sitting above the gunfire. This is the
+// dopamine hit; it must feel like a little "yes".
+std::vector<float> killConfirm() {
+    auto buf = makeBuffer(0.16f);
+    auto blip = [&](float startS, float freq, float amp) {
+        size_t s0 = size_t(startS * kRate);
+        for (size_t i = s0; i < buf.size(); ++i) {
+            float t = float(i - s0) / kRate;
+            float env = std::min(t / 0.003f, 1.0f) * envExp(t, 0.04f);
+            buf[i] += std::sin(2 * 3.14159265f * freq * t) * env * amp;
+        }
+    };
+    blip(0.00f, 1320.0f, 0.8f); // E6
+    blip(0.05f, 1760.0f, 1.0f); // A6
+    finalize(buf, 0.50f);
+    return buf;
+}
+
+// Enemy shot: an enemy's gun heard across the arena - the gunshot's cousin,
+// duller and boomier so incoming fire is distinguishable from your own crisp
+// crack. Slightly lower crack cutoff and a heavier body thump.
+std::vector<float> enemyShot() {
+    auto buf = makeBuffer(0.34f);
+    Rng rng; OnePole lp;
+    for (size_t i = 0; i < buf.size(); ++i) {
+        float t = float(i) / kRate;
+        float bright = 4200.0f * envExp(t, 0.045f) + 300.0f;
+        float crack = lp.step(rng.next(), bright) * envExp(t, 0.08f) * 1.3f;
+        float f = 95.0f - 45.0f * std::min(t / 0.15f, 1.0f);
+        float body = std::sin(2 * 3.14159265f * f * t) * envExp(t, 0.10f) * 1.0f;
+        buf[i] = std::tanh((crack + body) * 1.6f);
+    }
+    finalize(buf, 0.80f);
+    return buf;
+}
+
+// Round win: a short rising major arpeggio (C-E-G-C) - triumphant, clean,
+// unmistakably "you won".
+std::vector<float> roundWin() {
+    auto buf = makeBuffer(0.70f);
+    auto note = [&](float startS, float freq, float amp) {
+        size_t s0 = size_t(startS * kRate);
+        for (size_t i = s0; i < buf.size(); ++i) {
+            float t = float(i - s0) / kRate;
+            float env = std::min(t / 0.006f, 1.0f) * envExp(t, 0.16f);
+            float v = std::sin(2 * 3.14159265f * freq * t)
+                      + 0.3f * std::sin(2 * 3.14159265f * freq * 2.0f * t);
+            buf[i] += v * env * amp;
+        }
+    };
+    note(0.00f, 523.25f, 0.7f);  // C5
+    note(0.11f, 659.25f, 0.75f); // E5
+    note(0.22f, 783.99f, 0.8f);  // G5
+    note(0.34f, 1046.5f, 0.95f); // C6
+    finalize(buf, 0.60f);
+    return buf;
+}
+
+// Round lose: a falling two-note minor drop with a low tail - deflating,
+// the sound of a lost round.
+std::vector<float> roundLose() {
+    auto buf = makeBuffer(0.70f);
+    auto note = [&](float startS, float freq, float tau, float amp) {
+        size_t s0 = size_t(startS * kRate);
+        for (size_t i = s0; i < buf.size(); ++i) {
+            float t = float(i - s0) / kRate;
+            float env = std::min(t / 0.008f, 1.0f) * envExp(t, tau);
+            float v = std::sin(2 * 3.14159265f * freq * t)
+                      + 0.25f * std::sin(2 * 3.14159265f * freq * 0.5f * t);
+            buf[i] += v * env * amp;
+        }
+    };
+    note(0.00f, 415.30f, 0.16f, 0.8f); // G#4
+    note(0.16f, 311.13f, 0.30f, 0.9f); // D#4
+    finalize(buf, 0.58f);
+    return buf;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -343,6 +460,10 @@ int main(int argc, char** argv) {
         {"shield_block", shieldBlock}, {"kick_hit", kickHit},
         {"guard_break", guardBreak},   {"throw", throwWoosh},
         {"windup_cue", windupCue},
+        // MiniCS: pistol handling + round/kill feedback.
+        {"reload", reload},            {"dry_fire", dryFire},
+        {"kill_confirm", killConfirm}, {"enemy_shot", enemyShot},
+        {"round_win", roundWin},       {"round_lose", roundLose},
     };
 
     bool ok = true;

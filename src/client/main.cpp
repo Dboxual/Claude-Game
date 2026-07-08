@@ -116,6 +116,11 @@ int main(int argc, char** argv) {
         double frameDt = std::chrono::duration<double>(now - last).count();
         last = now;
         frameDt = std::min(frameDt, 0.25);
+        // Framed runs (smoke tests / screenshots) step a fixed 60 Hz clock so a
+        // given frame number always lands at the same sim time - otherwise the
+        // offscreen window's wildly variable frame rate makes timed captures
+        // (e.g. --fire-at past a countdown) non-reproducible.
+        if (maxFrames >= 0) frameDt = 1.0 / 60.0;
 
         int w = 0, h = 0;
         platform.window->pixelSize(w, h);

@@ -31,6 +31,7 @@ private:
     GLuint cubeVbo_ = 0;
     GLint locProj_ = -1, locView_ = -1, locModel_ = -1, locColor_ = -1, locChecker_ = -1;
     GLint locNormalMat_ = -1, locEmissive_ = -1;
+    GLint locFogColor_ = -1, locFogScale_ = -1, locFogMax_ = -1;
 
     GLuint textProg_ = 0;
     GLuint textVao_ = 0;

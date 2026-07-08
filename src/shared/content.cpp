@@ -33,9 +33,9 @@ void ContentRegistry::registerBuiltins() {
         w.id = "glock";
         w.displayName = "Glock";
         w.kind = WeaponKind::Hitscan;
-        w.damage = 25.0f;
+        w.damage = 34.0f;          // ~3 body shots to down a MiniCS enemy
         w.range = 60.0f;
-        w.cooldownSeconds = 0.15f; // semi-auto; ammo is a later phase
+        w.cooldownSeconds = 0.14f; // snappy semi-auto
         weapons_.push_back(w);
     }
     {
@@ -352,6 +352,40 @@ void ContentRegistry::registerBuiltins() {
         defs_.push_back(d);
     }
 
+    // --- MiniCS enemy: the ranged bot the round loop fights. Distinct from
+    // the melee duel_bot - this one advances, strafes, aims, and shoots. Its
+    // whole brain (movement/aim/fire/flinch/death) lives in client code
+    // (Game::updateMinicsEnemies); the def is just the silhouette + hitbox.
+    // Crimson on purpose: it must read as ENEMY at a glance against the tan
+    // arena and slate walls. maxHealth is tuned to ~3 Glock body shots.
+    {
+        EntityDef d;
+        d.id = "minics_bot";
+        d.displayName = "Enemy";
+        d.category = ContentCategory::Bot;
+        d.size = {0.64f, 1.82f, 0.64f};
+        d.color = {0.78f, 0.22f, 0.20f};
+        d.solid = true;
+        d.maxHealth = 90.0f;
+        d.spawnable = false;      // placed by the round loop, not the build menu
+        d.respawnSeconds = 0.0f;  // round-based: dead is dead until the next round
+        // Fallback single-figure visual. The live enemy is drawn procedurally
+        // (walk/aim/shoot/flinch) so this only shows if it ever loses its brain.
+        const glm::vec3 vest{0.78f, 0.22f, 0.20f};
+        const glm::vec3 vestDark{0.60f, 0.16f, 0.15f};
+        const glm::vec3 gearDark{0.20f, 0.21f, 0.24f};
+        const glm::vec3 skin{0.86f, 0.68f, 0.54f};
+        d.visual = {
+            {{-0.15f, 0.34f, 0.0f}, {0.20f, 0.70f, 0.24f}, gearDark}, // left leg
+            {{0.15f, 0.34f, 0.0f}, {0.20f, 0.70f, 0.24f}, gearDark},  // right leg
+            {{0.0f, 1.02f, 0.0f}, {0.52f, 0.66f, 0.34f}, vest},       // torso vest
+            {{0.0f, 1.28f, 0.0f}, {0.60f, 0.16f, 0.40f}, vestDark},   // shoulders
+            {{0.0f, 1.58f, 0.0f}, {0.28f, 0.30f, 0.28f}, skin},       // head
+            {{0.0f, 1.72f, 0.0f}, {0.30f, 0.10f, 0.30f}, gearDark},   // helmet cap
+        };
+        defs_.push_back(d);
+    }
+
     // --- ground item drops: what mobs leave behind and what loose resources
     // look like lying in the world. E picks them up into the item inventory.
     // Small hovering cubes tinted like their item; ids are "drop_" + item id
@@ -402,6 +436,30 @@ void ContentRegistry::registerBuiltins() {
         defs_.push_back(d);
     }
 
+    {
+        // Neon pillar: a glowing landmark prop (also light cover). Emissive
+        // cyan core + magenta cap + amber base ring on a dark column - the
+        // arena's neon vocabulary in one placeable object. Solid, static.
+        EntityDef d;
+        d.id = "neon_pillar";
+        d.displayName = "Neon Pillar";
+        d.category = ContentCategory::Prop;
+        d.size = {0.5f, 3.0f, 0.5f};
+        d.color = {0.15f, 0.9f, 1.0f};
+        d.solid = true;
+        const glm::vec3 column{0.10f, 0.11f, 0.15f};
+        const glm::vec3 cyan{0.15f, 0.95f, 1.0f};
+        const glm::vec3 magenta{1.0f, 0.20f, 0.75f};
+        const glm::vec3 amber{1.0f, 0.62f, 0.12f};
+        d.visual = {
+            {{0.0f, 1.5f, 0.0f}, {0.42f, 3.0f, 0.42f}, column, 0.0f},   // dark column
+            {{0.0f, 1.55f, 0.0f}, {0.5f, 2.5f, 0.14f}, cyan, 1.0f},     // glow panel X
+            {{0.0f, 1.55f, 0.0f}, {0.14f, 2.5f, 0.5f}, cyan, 1.0f},     // glow panel Z
+            {{0.0f, 3.06f, 0.0f}, {0.56f, 0.2f, 0.56f}, magenta, 1.0f}, // magenta cap
+            {{0.0f, 0.09f, 0.0f}, {0.62f, 0.18f, 0.62f}, amber, 1.0f},  // amber base ring
+        };
+        defs_.push_back(d);
+    }
     {
         // Heavy metal barrel: solid, NOT carryable, never respawns. Exists
         // partly to prove the carryable seam has both kinds of prop.

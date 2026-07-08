@@ -43,6 +43,7 @@ struct VisualPart {
     glm::vec3 offset{0.0f};
     glm::vec3 size{0.1f};
     glm::vec3 color{1.0f};
+    float emissive = 0.0f; // 0 = lit, 1 = full-bright (glowing LED/neon parts)
 };
 
 struct EntityDef {

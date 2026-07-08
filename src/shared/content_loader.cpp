@@ -76,20 +76,20 @@ bool parseEntityDef(const std::string& text, EntityDef& out) {
     d.hostile = getBool(cfg, "hostile", d.hostile);
     d.contactDamage = cfg.get("contact_damage", d.contactDamage);
 
-    // Visual boxes: part1..part16 = "ox oy oz sx sy sz r g b". ConfigFile is
-    // a flat map, so parts are numbered keys rather than repeated ones.
+    // Visual boxes: part1..part16 = "ox oy oz sx sy sz r g b [emissive]". The
+    // 10th value is optional (0 = lit, 1 = full-bright neon); ConfigFile is a
+    // flat map, so parts are numbered keys rather than repeated ones.
     for (int i = 1; i <= 16; ++i) {
         char key[16];
         std::snprintf(key, sizeof(key), "part%d", i);
         std::string v = cfg.getString(key, "");
         if (v.empty()) break;
         VisualPart p;
-        if (std::sscanf(v.c_str(), "%f %f %f %f %f %f %f %f %f",
-                        &p.offset.x, &p.offset.y, &p.offset.z,
-                        &p.size.x, &p.size.y, &p.size.z,
-                        &p.color.r, &p.color.g, &p.color.b) == 9) {
-            d.visual.push_back(p);
-        }
+        int n = std::sscanf(v.c_str(), "%f %f %f %f %f %f %f %f %f %f",
+                            &p.offset.x, &p.offset.y, &p.offset.z,
+                            &p.size.x, &p.size.y, &p.size.z,
+                            &p.color.r, &p.color.g, &p.color.b, &p.emissive);
+        if (n >= 9) d.visual.push_back(p); // emissive defaults to 0 when absent
     }
     out = d;
     return true;
