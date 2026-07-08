@@ -19,6 +19,9 @@ worlds, renderer rewrites, or VRChat-scale social systems yet.
   MiniCS, all six modes, and the dedicated server.
 - Milestone 1: created this progress ledger and cleaned stale continuation docs
   so future Codex runs do not chase already-completed MiniCS work.
+- Milestone 2: added a real `PLAY MINICS` quick-launch button on the main menu,
+  added a direct MiniCS entry to the Play submenu, and made menu/card surfaces
+  more opaque for readability over the neon arena backdrop.
 - Recent MiniCS combat pass: lane-pressure bots, headshots, ADS, faster reload,
   hidden MiniCS enemy health clutter, death silhouettes, extra neon pillars, and
   animated lane pulse.
@@ -49,11 +52,11 @@ worlds, renderer rewrites, or VRChat-scale social systems yet.
 
 ## Latest commits
 
+- Make MiniCS launch obvious (current commit)
+- `6456726 Add Codex progress ledger`
 - `d11549f Polish MiniCS combat feel`
 - `43de102 MiniCS vertical slice + neon identity + Codex handoff`
 - `37a22de Add NEXT_STEPS_FOR_CHATGPT review notes`
-- `05d7928 Restructure to game-mode-first hub; add MiniCS as first playable mode`
-- `1571c12 Add world type templates: flat, duel, aim, movement, social`
 
 ## Latest validation
 
@@ -61,9 +64,13 @@ worlds, renderer rewrites, or VRChat-scale social systems yet.
 - All modes: `minics`, `deathmatch`, `sandbox`, `zombies`, `parkour`, `social`
   with `--frames 120`
 - `build\Release\tacmove_server.exe --ticks 384`
+- `cmake --build build --config Release --parallel`
 - Screenshots:
   - `build\codex_baseline_gamemodes.bmp`
   - `build\codex_baseline_minics_pressure.bmp`
+  - `build\codex_m2_mainmenu.bmp`
+  - `build\codex_m2_play.bmp`
+  - `build\codex_m2_gamemodes_final.bmp`
 
 ## Known bugs
 
@@ -71,8 +78,8 @@ worlds, renderer rewrites, or VRChat-scale social systems yet.
   use `--frames` for deterministic smoke tests and screenshots.
 - Non-MiniCS modes are still Early or sandbox-focused and should not drive the
   near-term scope.
-- Menu/game-mode cards can visually overlap the bright arena backdrop lines in
-  screenshots; readability needs a small visual polish pass.
+- The menu backdrop is intentionally active; keep checking screenshots when
+  changing menu/card opacity or camera angles.
 - MiniCS enemy fire is still hitscan with distance/movement accuracy rather than
   projectile leading or suppression.
 
@@ -90,9 +97,9 @@ worlds, renderer rewrites, or VRChat-scale social systems yet.
 
 ## What should happen next
 
-Milestone 2 should make the MiniCS launch path more obvious and reliable
-without adding new menu depth: clarify docs/flags if needed, improve menu card
-readability, and keep direct `--mode minics` launch validated.
+Milestone 3 should improve MiniCS visual identity without renderer rewrites:
+more authored neon/LED arena props, stronger atmosphere/color balance, cleaner
+HUD hierarchy, and more alive-but-cheap environmental motion.
 
 ## Do you need to test now?
 

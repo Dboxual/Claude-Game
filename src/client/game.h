@@ -83,7 +83,7 @@ private:
     struct UiButton {
         enum class Id {
             // main menu
-            OpenPlay, OpenCreate, OpenProfile, OpenSettings, QuitApp,
+            LaunchMiniCS, OpenPlay, OpenCreate, OpenProfile, OpenSettings, QuitApp,
             // play submenu
             OpenGameModes, OpenServers, OpenRecentGames,
             // game modes list (payload = index into gamemodes::all())

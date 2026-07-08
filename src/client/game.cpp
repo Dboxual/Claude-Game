@@ -2357,6 +2357,9 @@ void Game::activateButton(UiButton::Id id, int payload) {
     bool settingsChanged = false;
     switch (id) {
     // Navigation.
+    case Id::LaunchMiniCS:
+        if (const GameMode* m = gamemodes::find("minics")) startGameMode(*m);
+        break;
     case Id::OpenPlay: ui_ = UiScreen::Play; menuStatus_.clear(); break;
     case Id::OpenCreate: ui_ = UiScreen::Create; menuStatus_.clear(); break;
     case Id::OpenProfile: ui_ = UiScreen::Profile; menuStatus_.clear(); break;
@@ -2532,7 +2535,8 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
 
     switch (ui_) {
     case UiScreen::MainMenu:
-        column(viewportH * 0.36f, {
+        column(viewportH * 0.32f, {
+            {Id::LaunchMiniCS, 0, 0, 0, 0, "PLAY MINICS", true},
             {Id::OpenPlay, 0, 0, 0, 0, "PLAY", true},
             {Id::OpenCreate, 0, 0, 0, 0, "CREATE", true},
             {Id::OpenProfile, 0, 0, 0, 0, "PROFILE", true},
@@ -2542,7 +2546,8 @@ std::vector<Game::UiButton> Game::buildMenuLayout(int viewportW, int viewportH) 
         break;
 
     case UiScreen::Play:
-        column(viewportH * 0.40f, {
+        column(viewportH * 0.36f, {
+            {Id::LaunchMiniCS, 0, 0, 0, 0, "MINICS", true},
             {Id::OpenGameModes, 0, 0, 0, 0, "GAME MODES", true},
             {Id::OpenServers, 0, 0, 0, 0, "SERVERS", true},
             {Id::OpenRecentGames, 0, 0, 0, 0, "RECENT GAMES", true},
@@ -3955,9 +3960,13 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
         frame.texts.push_back(std::move(t));
     };
 
-    // Dim the world (frozen gameplay or the orbiting menu backdrop).
+    // Dim the world (frozen gameplay or the orbiting menu backdrop). Submenus
+    // need a little more opacity because the neon lane lines pass behind text.
+    float dimAlpha = ui_ == UiScreen::MainMenu ? 0.55f
+                     : ui_ == UiScreen::GameModes ? 0.72f
+                                                  : 0.66f;
     frame.rects.push_back({0, 0, float(viewportW), float(viewportH),
-                           glm::vec4(0.05f, 0.07f, 0.10f, ui_ == UiScreen::MainMenu ? 0.55f : 0.62f)});
+                           glm::vec4(0.05f, 0.07f, 0.10f, dimAlpha)});
 
     // A screen title with a short accent underline beneath it, so every
     // sub-screen reads as part of one hub instead of a bare label.
@@ -4189,14 +4198,18 @@ void Game::appendMenuDraws(RenderFrame& frame) const {
             continue;
         }
 
-        glm::vec4 fill = !b.enabled    ? glm::vec4(0.13f, 0.15f, 0.19f, 0.85f)
-                       : hovered       ? glm::vec4(0.30f, 0.44f, 0.64f, 0.96f)
-                       : b.highlighted ? glm::vec4(0.24f, 0.40f, 0.40f, 0.95f)
-                                       : glm::vec4(0.16f, 0.20f, 0.28f, 0.92f);
+        bool primary = b.id == UiButton::Id::LaunchMiniCS;
+        glm::vec4 fill = !b.enabled    ? glm::vec4(0.13f, 0.15f, 0.19f, 0.95f)
+                       : hovered && primary ? glm::vec4(0.22f, 0.46f, 0.58f, 1.0f)
+                       : primary      ? glm::vec4(0.12f, 0.30f, 0.38f, 1.0f)
+                       : hovered       ? glm::vec4(0.30f, 0.44f, 0.64f, 1.0f)
+                       : b.highlighted ? glm::vec4(0.24f, 0.40f, 0.40f, 1.0f)
+                                       : glm::vec4(0.13f, 0.17f, 0.24f, 1.0f);
         frame.rects.push_back({b.x, b.y, b.w, b.h, fill});
         // A left accent stripe on the active button reads as a selection cue.
-        if (hovered || b.highlighted) {
-            frame.rects.push_back({b.x, b.y, 4.0f, b.h, accent});
+        if (hovered || b.highlighted || primary) {
+            glm::vec4 stripe = primary ? glm::vec4(0.20f, 0.95f, 1.0f, 1.0f) : accent;
+            frame.rects.push_back({b.x, b.y, primary ? 5.0f : 4.0f, b.h, stripe});
         }
 
         // Game-mode cards: name left-aligned, tagline under it, status badge
