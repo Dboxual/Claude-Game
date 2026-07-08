@@ -2807,11 +2807,11 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
     // dusk so the emissive accents, tracers and muzzle flashes glow; every
     // other world keeps the daytime defaults baked into RenderFrame.
     if (currentWorldType_ == "minics_arena") {
-        frame.skyTop = {0.04f, 0.05f, 0.11f};
-        frame.skyHorizon = {0.24f, 0.09f, 0.30f};
-        frame.fogColor = {0.10f, 0.07f, 0.16f};
-        frame.fogScale = 70.0f;
-        frame.fogMax = 0.55f;
+        frame.skyTop = {0.018f, 0.024f, 0.060f};
+        frame.skyHorizon = {0.28f, 0.08f, 0.34f};
+        frame.fogColor = {0.09f, 0.055f, 0.15f};
+        frame.fogScale = 58.0f;
+        frame.fogMax = 0.62f;
     }
 
     glm::vec3 playerRenderPos = player_.pos; // interpolated below; body draw uses it
@@ -2857,7 +2857,7 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
     frame.viewmodelProj = glm::perspective(glm::radians(58.0f), aspect, 0.02f, 8.0f);
 
     // World geometry.
-    frame.boxes.reserve(world_.boxes().size() + world_.entities().size());
+    frame.boxes.reserve(world_.boxes().size() + world_.entities().size() + 48);
     for (const WorldBox& wb : world_.boxes()) {
         BoxDraw draw;
         draw.center = (wb.box.min + wb.box.max) * 0.5f;
@@ -2868,16 +2868,53 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         frame.boxes.push_back(draw);
     }
     if (currentWorldType_ == "minics_arena") {
-        float sweep = std::fmod(float(menuTime_) * 6.5f, 24.0f);
+        auto fxBox = [&frame](glm::vec3 center, glm::vec3 size, glm::vec3 color,
+                              float emissive = 1.0f) {
+            BoxDraw d;
+            d.center = center;
+            d.size = size;
+            d.color = color;
+            d.emissive = emissive;
+            frame.boxes.push_back(d);
+        };
+
+        float t = float(menuTime_);
+        float sweep = std::fmod(t * 6.5f, 24.0f);
         for (float laneX : {-8.95f, 0.0f, 8.95f}) {
             float z = 13.5f - sweep;
-            BoxDraw pulse;
-            pulse.center = {laneX, 0.035f, z};
-            pulse.size = {laneX == 0.0f ? 0.62f : 0.46f, 0.025f, 0.75f};
-            pulse.color = laneX == 0.0f ? glm::vec3(0.35f, 1.0f, 0.92f)
-                                        : glm::vec3(1.0f, 0.24f, 0.78f);
-            pulse.emissive = 1.0f;
-            frame.boxes.push_back(pulse);
+            fxBox({laneX, 0.035f, z},
+                  {laneX == 0.0f ? 0.62f : 0.46f, 0.025f, 0.75f},
+                  laneX == 0.0f ? glm::vec3(0.35f, 1.0f, 0.92f)
+                                : glm::vec3(1.0f, 0.24f, 0.78f));
+        }
+
+        // Render-only LED sweeps and wall-panel equalizers make the arena feel
+        // powered without touching movement collision or bot routing.
+        for (int i = 0; i < 4; ++i) {
+            float z = 17.0f - std::fmod(t * 4.2f + float(i) * 7.0f, 32.0f);
+            float a = 0.65f + 0.35f * std::sin(t * 3.0f + float(i));
+            fxBox({-13.6f, 2.25f, z}, {0.055f, 0.42f, 1.6f},
+                  glm::vec3(0.18f, 0.90f, 1.0f) * a);
+            fxBox({13.6f, 2.25f, z - 3.5f}, {0.055f, 0.42f, 1.6f},
+                  glm::vec3(1.0f, 0.20f, 0.78f) * a);
+        }
+        for (int i = 0; i < 9; ++i) {
+            float h = 0.35f + 0.55f * (0.5f + 0.5f * std::sin(t * 4.0f + float(i) * 0.9f));
+            glm::vec3 c = (i % 3 == 0) ? glm::vec3(1.0f, 0.62f, 0.18f)
+                          : (i % 3 == 1) ? glm::vec3(0.25f, 1.0f, 0.95f)
+                                         : glm::vec3(1.0f, 0.22f, 0.76f);
+            fxBox({-3.9f + float(i) * 0.98f, 2.08f + h * 0.5f, -21.80f},
+                  {0.38f, h, 0.045f}, c);
+        }
+        float gate = 0.55f + 0.45f * std::sin(t * 3.2f);
+        fxBox({0.0f, 3.35f, 11.0f}, {6.8f, 0.07f, 0.22f},
+              glm::vec3(0.25f, 1.0f, 0.90f) * gate);
+        fxBox({0.0f, 3.35f, -7.2f}, {5.4f, 0.07f, 0.22f},
+              glm::vec3(1.0f, 0.24f, 0.78f) * (1.0f - gate * 0.45f));
+        for (float x : {-5.8f, -3.2f, 3.2f, 5.8f}) {
+            float pulse = 0.45f + 0.55f * std::sin(t * 5.0f + x);
+            fxBox({x, 0.055f, 16.95f}, {0.54f, 0.035f, 0.52f},
+                  glm::vec3(0.55f, 1.0f, 0.30f) * pulse);
         }
     }
 
@@ -3730,6 +3767,8 @@ void Game::appendMinicsEnemyDraws(RenderFrame& frame) const {
     const glm::vec3 gear{0.20f, 0.21f, 0.24f};
     const glm::vec3 skin{0.86f, 0.68f, 0.54f};
     const glm::vec3 gunCol{0.11f, 0.11f, 0.13f};
+    const glm::vec3 ledCyan{0.22f, 1.0f, 0.92f};
+    const glm::vec3 ledPink{1.0f, 0.18f, 0.68f};
 
     for (const MinicsDeathFx& fx : minicsDeaths_) {
         float k = fx.total > 0.0f ? glm::clamp(1.0f - fx.life / fx.total, 0.0f, 1.0f) : 1.0f;
@@ -3753,6 +3792,8 @@ void Game::appendMinicsEnemyDraws(RenderFrame& frame) const {
         obox(group, {0.0f, 1.30f, 0.0f}, {0, 0, 0}, {0.60f, 0.16f, 0.40f}, C(vestDark));
         obox(group, {0.0f, 1.60f, -0.02f}, {0, 0, 0}, {0.28f, 0.30f, 0.28f}, C(skin),
              fx.headshot ? 0.15f : 0.0f);
+        obox(group, {0.0f, 1.61f, -0.18f}, {0, 0, 0}, {0.22f, 0.035f, 0.035f},
+             fx.headshot ? glm::vec3(1.0f, 0.82f, 0.24f) : ledPink, 0.5f);
         obox(group, {0.0f, 1.75f, -0.02f}, {0, 0, 0}, {0.31f, 0.11f, 0.31f}, C(gear));
         obox(group, {0.32f, 1.03f, -0.12f}, {68.0f, 0, 0}, {0.12f, 0.40f, 0.14f},
              C(vestDark));
@@ -3785,7 +3826,15 @@ void Game::appendMinicsEnemyDraws(RenderFrame& frame) const {
         obox(group, {0.0f, 1.04f, 0.0f}, {0, 0, 0}, {0.52f, 0.66f, 0.34f}, C(vest));
         obox(group, {0.0f, 1.32f, 0.0f}, {0, 0, 0}, {0.60f, 0.16f, 0.40f}, C(vestDark));
         obox(group, {0.0f, 1.58f, 0.0f}, {0, 0, 0}, {0.28f, 0.30f, 0.28f}, C(skin));
+        obox(group, {0.0f, 1.59f, -0.18f}, {0, 0, 0}, {0.22f, 0.035f, 0.035f},
+             glm::mix(ledPink, glm::vec3(1.0f, 0.90f, 0.35f), hitFlash), 0.65f);
         obox(group, {0.0f, 1.73f, 0.0f}, {0, 0, 0}, {0.31f, 0.11f, 0.31f}, C(gear));
+        obox(group, {0.0f, 1.16f, -0.19f}, {0, 0, 0}, {0.34f, 0.035f, 0.035f},
+             glm::mix(ledCyan, glm::vec3(1.0f, 0.82f, 0.26f), hitFlash), 0.55f);
+        obox(group, {-0.35f, 1.33f, -0.05f}, {0, 0, 0}, {0.035f, 0.12f, 0.035f},
+             ledCyan, 0.45f);
+        obox(group, {0.35f, 1.33f, -0.05f}, {0, 0, 0}, {0.035f, 0.12f, 0.035f},
+             ledPink, 0.45f);
 
         // Arms + pistol. Aiming raises both arms level and pushes the gun
         // forward (local -Z, which faces the player); at rest they hang lower.
@@ -3823,16 +3872,26 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
         t.text = std::move(s);
         frame.texts.push_back(std::move(t));
     };
+    auto rect = [&](float x, float y, float w, float h, glm::vec4 col) {
+        frame.rects.push_back({x, y, w, h, col});
+    };
+    const glm::vec4 panelBg(0.025f, 0.035f, 0.060f, 0.78f);
+    const glm::vec4 panelEdge(0.16f, 0.95f, 1.0f, 0.92f);
+    const glm::vec4 hotPink(1.0f, 0.20f, 0.72f, 0.92f);
 
     // --- End screen (Won / Lost): a dim overlay with the result + restart.
     if (minicsPhase_ == MiniCSPhase::Won || minicsPhase_ == MiniCSPhase::Lost) {
         bool won = minicsPhase_ == MiniCSPhase::Won;
-        frame.rects.push_back({0, 0, float(vw), float(vh),
-                               glm::vec4(0.04f, 0.06f, 0.09f, 0.62f)});
         glm::vec4 head = won ? glm::vec4(0.45f, 1.0f, 0.55f, 1.0f)
                              : glm::vec4(1.0f, 0.40f, 0.34f, 1.0f);
+        rect(0, 0, float(vw), float(vh), glm::vec4(0.04f, 0.06f, 0.09f, 0.62f));
+        rect(cx - 300.0f, vh * 0.19f, 600.0f, 360.0f,
+             glm::vec4(0.025f, 0.035f, 0.060f, 0.82f));
+        rect(cx - 300.0f, vh * 0.19f, 600.0f, 4.0f, head);
+        rect(cx - 300.0f, vh * 0.19f + 356.0f, 600.0f, 4.0f,
+             glm::vec4(0.16f, 0.95f, 1.0f, 0.75f));
         text(cx, vh * 0.24f, 6.5f, head, won ? "VICTORY" : "DEFEAT", true);
-        frame.rects.push_back({cx - 150.0f, vh * 0.24f + 58.0f, 300.0f, 3.0f, head});
+        rect(cx - 150.0f, vh * 0.24f + 58.0f, 300.0f, 3.0f, head);
         text(cx, vh * 0.24f + 74.0f, 2.0f, glm::vec4(0.82f, 0.86f, 0.92f, 1.0f),
              minicsResultNote_, true);
         std::snprintf(buf, sizeof(buf), "ENEMIES ELIMINATED   %d / %d", minicsKills_,
@@ -3857,9 +3916,13 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
 
     // --- Ammo block, bottom-right: big magazine count over a small reserve.
     {
-        float ax = vw - 196.0f, ay = vh - 78.0f;
-        frame.rects.push_back({ax - 18.0f, ay - 14.0f, 190.0f, 62.0f,
-                               glm::vec4(0.05f, 0.07f, 0.10f, 0.45f)});
+        float panelW = 218.0f, panelH = 88.0f;
+        float px = vw - panelW - 18.0f, py = vh - panelH - 22.0f;
+        float ax = px + 22.0f, ay = py + 20.0f;
+        rect(px, py, panelW, panelH, panelBg);
+        rect(px, py, panelW, 3.0f, magAmmo_ <= 5 ? glm::vec4(1.0f, 0.62f, 0.16f, 0.95f)
+                                                 : panelEdge);
+        rect(px, py + panelH - 3.0f, panelW, 3.0f, hotPink);
         glm::vec4 magCol = magAmmo_ == 0 ? glm::vec4(0.96f, 0.30f, 0.24f, 1.0f)
                            : magAmmo_ <= 5 ? glm::vec4(0.98f, 0.76f, 0.30f, 1.0f)
                                            : white;
@@ -3867,6 +3930,14 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
         text(ax, ay - 8.0f, 4.8f, magCol, buf);
         std::snprintf(buf, sizeof(buf), "/ %d", reserveAmmo_);
         text(ax + 92.0f, ay + 18.0f, 2.2f, glm::vec4(0.72f, 0.78f, 0.85f, 1.0f), buf);
+        float pipY = py + panelH - 20.0f;
+        for (int i = 0; i < magSize_; ++i) {
+            float x = px + 18.0f + float(i) * 10.5f;
+            glm::vec4 c = i < magAmmo_ ? glm::vec4(0.25f, 1.0f, 0.90f, 0.92f)
+                                       : glm::vec4(0.22f, 0.26f, 0.32f, 0.70f);
+            if (magAmmo_ <= 5 && i < magAmmo_) c = glm::vec4(1.0f, 0.62f, 0.18f, 0.95f);
+            rect(x, pipY, 6.8f, 9.0f, c);
+        }
         if (reloadTimer_ > 0.0f) {
             text(ax + 6.0f, ay - 34.0f, 2.0f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), "RELOADING");
         }
@@ -3879,6 +3950,12 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
     // --- Round clock + enemies remaining, top-center; score top-left.
     float remain = minicsPhase_ == MiniCSPhase::Live ? std::max(0.0f, minicsPhaseTimer_)
                                                      : kMinicsRoundSeconds;
+    rect(cx - 132.0f, 10.0f, 264.0f, 72.0f, panelBg);
+    rect(cx - 132.0f, 10.0f, 264.0f, 3.0f,
+         remain <= 10.0f ? glm::vec4(0.98f, 0.35f, 0.28f, 0.95f) : panelEdge);
+    rect(cx - 132.0f, 79.0f, 264.0f, 3.0f, hotPink);
+    rect(12.0f, 10.0f, 176.0f, 48.0f, panelBg);
+    rect(12.0f, 10.0f, 3.0f, 48.0f, glm::vec4(1.0f, 0.85f, 0.28f, 0.92f));
     std::snprintf(buf, sizeof(buf), "%d:%02d", int(remain) / 60, int(remain) % 60);
     text(cx, 16.0f, 3.2f, remain <= 10.0f ? glm::vec4(0.98f, 0.35f, 0.28f, 1.0f) : white,
          buf, true);
@@ -3886,10 +3963,14 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
                   minicsEnemiesTotal_);
     text(cx, 56.0f, 2.0f, glm::vec4(0.92f, 0.62f, 0.55f, 1.0f), buf, true);
     std::snprintf(buf, sizeof(buf), "SCORE  %d", minicsScore_);
-    text(16.0f, 14.0f, 2.4f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), buf);
+    text(24.0f, 22.0f, 2.4f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), buf);
 
     // --- Countdown / FIGHT banners.
     if (minicsPhase_ == MiniCSPhase::Countdown) {
+        rect(cx - 230.0f, vh * 0.31f, 460.0f, 160.0f,
+             glm::vec4(0.025f, 0.035f, 0.060f, 0.64f));
+        rect(cx - 230.0f, vh * 0.31f, 460.0f, 3.0f, panelEdge);
+        rect(cx - 230.0f, vh * 0.31f + 157.0f, 460.0f, 3.0f, hotPink);
         text(cx, vh * 0.33f, 3.2f, glm::vec4(0.7f, 0.85f, 1.0f, 1.0f), "GET READY", true);
         std::snprintf(buf, sizeof(buf), "%d", std::max(1, int(std::ceil(minicsPhaseTimer_))));
         text(cx, vh * 0.40f, 6.5f, white, buf, true);

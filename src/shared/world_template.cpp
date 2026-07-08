@@ -180,6 +180,10 @@ WorldTemplate minicsArena() {
     neon(t.boxes, {-4.05f, 1.16f, 2.9f}, {4.05f, 1.24f, 3.05f}, kNeonAmber);
     neon(t.boxes, {-4.05f, 1.16f, -3.0f}, {-3.9f, 1.24f, 3.0f}, kNeonAmber);
     neon(t.boxes, {3.9f, 1.16f, -3.0f}, {4.05f, 1.24f, 3.0f}, kNeonAmber);
+    // A cyan underside glow makes the mid bridge read from spawn even through
+    // fog, without adding cover or changing the playable lanes.
+    neon(t.boxes, {-2.8f, 0.30f, -3.08f}, {2.8f, 0.38f, -2.98f}, kNeonCyan);
+    neon(t.boxes, {-2.8f, 0.30f, 2.98f}, {2.8f, 0.38f, 3.08f}, kNeonCyan);
 
     // Crate cover clusters (jumpable, breakable sightlines) around the arena.
     box(t.boxes, {-11.0f, 0.0f, 8.0f}, {-9.0f, 1.2f, 10.0f}, kCsCover, true);
@@ -190,6 +194,15 @@ WorldTemplate minicsArena() {
     box(t.boxes, {-2.0f, 0.0f, -14.0f}, {2.0f, 1.6f, -12.5f}, kCsCover, true); // north choke
     box(t.boxes, {13.0f, 0.0f, -2.0f}, {14.5f, 2.2f, 4.0f}, kCsWall);          // side wall bit
     box(t.boxes, {-14.5f, 0.0f, -2.0f}, {-13.0f, 2.2f, 4.0f}, kCsWall);
+    // LED trims on the cover clusters turn plain boxes into readable arena
+    // props. These are flush with the cover surfaces, so they do not alter
+    // route widths in practice.
+    neon(t.boxes, {-11.02f, 1.22f, 7.95f}, {-8.98f, 1.30f, 8.08f}, kNeonCyan);
+    neon(t.boxes, {-11.02f, 2.02f, 9.95f}, {-9.48f, 2.10f, 10.08f}, kNeonMagenta);
+    neon(t.boxes, {8.98f, 1.22f, 5.95f}, {11.02f, 1.30f, 6.08f}, kNeonCyan);
+    neon(t.boxes, {7.98f, 1.42f, -9.05f}, {10.02f, 1.50f, -8.92f}, kNeonAmber);
+    neon(t.boxes, {-10.52f, 1.42f, -8.05f}, {-8.48f, 1.50f, -7.92f}, kNeonAmber);
+    neon(t.boxes, {-2.02f, 1.62f, -14.05f}, {2.02f, 1.70f, -13.92f}, kNeonLime);
 
     // Wall-top LED strips near the top of each wall (high up, purely visual):
     // cyan down the long sides, magenta across the ends. This is what gives the
@@ -199,6 +212,27 @@ WorldTemplate minicsArena() {
     neon(t.boxes, {-18.0f, wy0, 21.98f}, {18.0f, wy1, 22.02f}, kNeonMagenta);   // south
     neon(t.boxes, {-18.02f, wy0, -22.0f}, {-17.98f, wy1, 22.0f}, kNeonCyan);    // west
     neon(t.boxes, {17.98f, wy0, -22.0f}, {18.02f, wy1, 22.0f}, kNeonCyan);      // east
+
+    // Wall-flush LED panels and a north scoreboard shape give the room a
+    // built arena identity instead of an empty test box. They sit on existing
+    // walls, so gameplay collision is unchanged from the wall ring.
+    box(t.boxes, {-5.4f, 2.0f, -21.97f}, {5.4f, 3.35f, -21.90f}, {0.05f, 0.06f, 0.10f});
+    neon(t.boxes, {-5.6f, 3.42f, -21.89f}, {5.6f, 3.54f, -21.84f}, kNeonAmber);
+    neon(t.boxes, {-5.6f, 1.82f, -21.89f}, {5.6f, 1.94f, -21.84f}, kNeonAmber);
+    neon(t.boxes, {-5.68f, 1.9f, -21.89f}, {-5.52f, 3.46f, -21.84f}, kNeonMagenta);
+    neon(t.boxes, {5.52f, 1.9f, -21.89f}, {5.68f, 3.46f, -21.84f}, kNeonCyan);
+    box(t.boxes, {-17.95f, 1.0f, -13.0f}, {-17.88f, 3.0f, -8.5f}, {0.05f, 0.06f, 0.10f});
+    neon(t.boxes, {-17.86f, 1.15f, -12.7f}, {-17.82f, 1.35f, -8.8f}, kNeonCyan);
+    neon(t.boxes, {-17.86f, 2.65f, -12.7f}, {-17.82f, 2.85f, -8.8f}, kNeonMagenta);
+    box(t.boxes, {17.88f, 1.0f, -5.5f}, {17.95f, 3.0f, -1.0f}, {0.05f, 0.06f, 0.10f});
+    neon(t.boxes, {17.82f, 1.15f, -5.2f}, {17.86f, 1.35f, -1.3f}, kNeonMagenta);
+    neon(t.boxes, {17.82f, 2.65f, -5.2f}, {17.86f, 2.85f, -1.3f}, kNeonCyan);
+
+    // Overhead gate strips divide the arena into named-feeling beats while
+    // staying above player and bot movement.
+    neon(t.boxes, {-12.5f, 3.15f, 10.8f}, {-5.0f, 3.28f, 11.05f}, kNeonMagenta);
+    neon(t.boxes, {5.0f, 3.15f, 10.8f}, {12.5f, 3.28f, 11.05f}, kNeonMagenta);
+    neon(t.boxes, {-3.7f, 3.15f, -7.35f}, {3.7f, 3.28f, -7.10f}, kNeonCyan);
 
     // Floor LED lane lines: a cyan centre lane guiding the push north, plus two
     // magenta flank lines. Flush to the floor (2 cm), so no collision matters.
