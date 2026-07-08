@@ -108,13 +108,15 @@ Layered so gameplay stays portable (enforced by CMake target boundaries):
 
 ## 8. What still feels bad (honest)
 
-- **Enemy movement has no pathfinding** — they sidestep cover but can still
-  bunch/oscillate near the mid platform and won't aggressively flank; a player
-  who camps at spawn is relatively safe until they push. *Biggest feel gap.*
+- **Enemy movement is still simple** — they now use cheap flank-lane pressure
+  and can punish a spawn camper, but there is no true pathfinding, cover
+  selection, or tactical squad behavior yet.
 - **Enemy fire is hitscan with distance-rolled accuracy** — no leading, no
   suppression, so incoming damage can feel a little random.
-- **No headshots** (single AABB per enemy) — aim skill only rewards hitting.
-- **Enemy death is a spark burst** (entity erased), not a fall/ragdoll — abrupt.
+- **Headshots exist but are simple** — a head sub-hitbox gives bonus damage and
+  a distinct cue, but there is still no detailed per-limb hit model.
+- **Enemy death is a short scripted topple**, not a real ragdoll or persistent
+  body.
 - Everything is **box-art** (world, enemies, viewmodel). No textures/models.
 - Muzzle flash is bright but still a blocky composite; tracers are box-composed.
 - The five non-MiniCS modes are **Early** (real world, no ruleset depth).
@@ -174,10 +176,10 @@ There is a **MINICS TUNING INDEX** comment block in `game.cpp` (just above the
 
 ## 13. Known bugs / rough spots
 
-- Enemies can bunch or oscillate against the mid platform / cover (no pathing).
-- The enemy-health readout (`ENEMY  90/90`) shows under the crosshair whenever
-  you aim at a bot — informative but a bit of combat clutter (consider hiding
-  in MiniCS or converting to a damage-flash-only cue).
+- Enemies can still occasionally bunch or oscillate against cover; lane routing
+  helps, but it is not full pathfinding.
+- The MiniCS enemy-health readout is hidden now; keep future target info
+  minimal so the crosshair stays clean during combat.
 - The menu backdrop shows the arena's template `duel_bot`s standing idle
   (cosmetic only; MiniCS itself uses `minics_bot`).
 - Offscreen/background frame rate varies wildly (SDL throttles unfocused
@@ -216,25 +218,16 @@ Current scale is tiny, so nothing is urgent, but for reference:
 
 ## 16. Next 5 concrete Codex tasks
 
-1. **Enemy movement pass** — in `Game::updateMinicsEnemies` (`game.cpp`), make
-   enemies route around the mid platform and use the flank lanes: e.g. pick a
-   left/right lane target, path along it, and actually close distance instead of
-   grinding into cover. Success: standing at spawn, you get pressured within
-   ~5 s. (Tuning constants are in the tuning-index block.)
-2. **Headshots** — give `minics_bot` a head sub-hitbox (a second AABB or a
-   height check in `tryAttack`) worth extra damage + a distinct kill cue.
-   Success: a headshot one/two-shots and feels different from a body shot.
-3. **Aim-down-sights** — RMB raises the Glock viewmodel toward center and
-   narrows FOV slightly (`appendViewmodelDraws` + `settings_.fovDegrees` path);
-   tighten spread while ADS. Keep it hip-fire-first, ADS as a light bonus.
-4. **Kill/round juice** — add an emissive impact decal + brighter particle
-   burst on hits and kills, an enemy death fall (short scripted topple before
-   erase), and a round-summary line ("3 kills · 12 s left · +430"). All in the
-   existing box/particle vocabulary.
-5. **Neon environment life** — animate a couple of emissive elements (slow pulse
-   on the wall LEDs via a time-scaled emissive, or a moving light strip) and add
-   1–2 more `neon_pillar`-style props so the arena feels authored. Keep it cheap
-   (no new render features).
+1. **MiniCS launch/readability pass** - make the MiniCS card and direct launch
+   path obvious, and keep the menu backdrop from fighting the card text.
+2. **Round-summary juice** - add a clearer end-of-round stat line with kills,
+   headshots, time bonus, and restart prompt hierarchy.
+3. **Impact/particle polish** - improve hit sparks, kill bursts, and surface
+   impact flashes using the existing box-particle vocabulary.
+4. **Bot polish pass** - tune lane routing, separation, aim timing, flinch, and
+   death topple so fights feel less random and more readable.
+5. **Optimization/organization pass** - reduce obvious repeated MiniCS lookups
+   and keep tuning constants documented without splitting or rewriting systems.
 
 ---
 

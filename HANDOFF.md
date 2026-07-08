@@ -181,14 +181,15 @@ replacement, no new render features — just emissive + per-frame atmosphere.
 
 ### What still feels bad / rough edges
 
-- **Enemy movement has no pathfinding.** They sidestep around cover but can
-  still bunch near the mid platform and won't aggressively rush; a player who
-  camps at spawn is fairly safe until they push forward. Biggest feel gap.
+- **Enemy movement has only cheap lane routing, not full pathfinding.** They now
+  pressure spawn campers through flank lanes, but complex cover choices and
+  true tactical flanks are still future work.
 - **Enemy fire is hitscan with distance-rolled accuracy** — no leading or
   suppression, so incoming damage can feel a touch random.
-- **No headshots** (single AABB), so aim skill only rewards hitting at all.
-- **Enemy death is a spark burst** (entity erased), not a fall/ragdoll — reads
-  as a kill but is abrupt.
+- **Headshots exist but are simple**, so aim skill is rewarded but there is no
+  detailed limb model yet.
+- **Enemy death has a short scripted topple**, not a real ragdoll or persistent
+  body.
 - Muzzle-flash boxes (player + enemy) are a little chunky.
 
 ### Exact files + values to tune next
@@ -263,11 +264,11 @@ macOS BMP→PNG for viewing: `sips -s format png shot.bmp --out shot.png`
 
 ## What to do next (suggested order)
 
-1. **Keep polishing MiniCS feel** (continue this pass): the biggest gap is
-   enemy movement — add light pathfinding / lane routing so they push and flank
-   instead of bunching at the mid; then headshot hitboxes, a proper death
-   reaction, best-of-N rounds or a difficulty ramp, and an aim-down-sights.
-   All the tuning knobs are listed in the MiniCS section above.
+1. **Keep polishing MiniCS feel** (continue this pass): the next gaps are
+   launch/readability, menu/background clarity, round-summary juice, richer
+   hit/kill particles, and tuning the existing lane routing/headshot/ADS/death
+   systems until they feel deliberate. All the tuning knobs are listed in the
+   MiniCS section above.
 2. **Real multiplayer foundation** (the big one): a client/server connection
    path over `protocol.h`, player spawn, a remote-player representation, then
    movement replication, then networked health/death/respawn. Move player
