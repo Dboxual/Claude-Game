@@ -239,6 +239,9 @@ private:
     std::unordered_map<unsigned, MobBrain> mobs_;
     float attackCooldown_ = 0.0f;   // hitscan fire interval (melee paces itself)
     float muzzleFlashTimer_ = 0.0f; // pistol-fire viewmodel flash/recoil
+    float slideCycleTimer_ = 0.0f;  // visible Glock slide snap after a shot
+    float dryFireTimer_ = 0.0f;     // empty-trigger twitch / click feedback
+    float reloadBeatTimer_ = 0.0f;  // short "mag seated / ready" flash
     float hitMarkerTimer_ = 0.0f;   // crosshair hit confirmation
     float footstepDistance_ = 0.0f; // meters walked since the last step sound
     float bobPhase_ = 0.0f;         // walk-cycle phase driving viewmodel bob
@@ -380,7 +383,7 @@ private:
     float reloadTimer_ = 0.0f;    // >0 = mid-reload (mag refills on completion)
     float recoilPitch_ = 0.0f;    // degrees of view-punch up, recovers to 0
     float recoilYaw_ = 0.0f;      // small horizontal kick, recovers to 0
-    float reloadDuration_ = 1.25f;
+    float reloadDuration_ = 1.08f;
     float adsBlend_ = 0.0f;       // RMB aim-down-sights ease, MiniCS Glock only
 
     // Feel-polish state: look sway, landing dip, first-spawn control hint.

@@ -250,7 +250,8 @@ void Game::beginSession() {
     itemInv_.reset();
     mobs_.clear();
     attackCooldown_ = 0.0f;
-    muzzleFlashTimer_ = hitMarkerTimer_ = 0.0f;
+    muzzleFlashTimer_ = slideCycleTimer_ = dryFireTimer_ = reloadBeatTimer_ = 0.0f;
+    hitMarkerTimer_ = 0.0f;
     footstepDistance_ = 0.0f;
     bobPhase_ = bobIntensity_ = equipTimer_ = 0.0f;
     lastEquippedId_.clear(); // triggers the raise animation on the first frame
@@ -973,6 +974,10 @@ void Game::tryAttack() {
     // instead of shooting. Only the Glock uses ammo; the staff is cooldown-only.
     if (usesAmmo()) {
         if (magAmmo_ <= 0) {
+            dryFireTimer_ = 0.16f;
+            reloadBeatTimer_ = 0.0f;
+            recoilPitch_ = std::min(7.0f, recoilPitch_ + 0.12f);
+            recoilYaw_ += (rand01() - 0.5f) * 0.10f;
             sfx("dry_fire", 0.98f + rand01() * 0.06f);
             attackCooldown_ = 0.18f; // don't machine-gun the empty click
             if (reserveAmmo_ > 0) tryReload();
@@ -983,7 +988,12 @@ void Game::tryAttack() {
     }
 
     attackCooldown_ = weapon->cooldownSeconds;
-    muzzleFlashTimer_ = 0.07f;
+    muzzleFlashTimer_ = usesAmmo() ? 0.085f : 0.07f;
+    if (usesAmmo()) {
+        slideCycleTimer_ = 0.12f;
+        dryFireTimer_ = 0.0f;
+        reloadBeatTimer_ = 0.0f;
+    }
     // The staff whooshes instead of banging; same audio set, different read.
     if (weapon->id == "basic_staff") sfx("swing", 0.55f + rand01() * 0.06f);
     else sfx("gunshot", 0.96f + rand01() * 0.08f);
@@ -1017,16 +1027,20 @@ void Game::tryAttack() {
     tr.from = eye + dir * 0.60f + right * 0.17f - up * 0.125f;
     tr.to = impact;
     float dist = glm::length(tr.to - tr.from);
-    tr.life = tr.total = std::max(0.02f, dist / 130.0f); // ~130 m/s visible speed
+    tr.life = tr.total = std::max(0.018f, dist / (usesAmmo() ? 160.0f : 130.0f));
     tr.impact = endT < weapon->range - 0.01f;
+    if (usesAmmo()) {
+        tr.color = {1.0f, 0.86f, 0.32f};
+        addSparks(tr.from + dir * 0.08f, 2, {1.0f, 0.70f, 0.22f});
+    }
     tracers_.push_back(tr);
 
     // Recoil view-punch AFTER the round leaves: the muzzle snaps up and a hair
     // sideways, then recovers in update(). Capped so it never spins the camera.
     if (usesAmmo()) {
-        float pitchKick = glm::mix(0.72f, 0.48f, adsBlend_) + rand01() * 0.22f;
-        recoilPitch_ = std::min(7.0f, recoilPitch_ + pitchKick);
-        recoilYaw_ += (rand01() - 0.5f) * glm::mix(0.58f, 0.24f, adsBlend_);
+        float pitchKick = glm::mix(0.82f, 0.50f, adsBlend_) + rand01() * 0.18f;
+        recoilPitch_ = std::min(7.4f, recoilPitch_ + pitchKick);
+        recoilYaw_ += (rand01() - 0.5f) * glm::mix(0.66f, 0.26f, adsBlend_);
     }
     if (hit.index < 0) return;
 
@@ -1058,18 +1072,20 @@ void Game::tryAttack() {
         Tracer& last = tracers_.back();
         last.to = hitPos;
         float headDist = glm::length(last.to - last.from);
-        last.life = last.total = std::max(0.02f, headDist / 130.0f);
+        last.life = last.total = std::max(0.018f, headDist / 160.0f);
+        last.color = {1.0f, 0.86f, 0.24f};
     }
 
-    hitMarkerTimer_ = 0.12f;
+    hitMarkerTimer_ = headshot ? 0.18f : 0.14f;
     if (headshot) {
-        headshotMarkerTimer_ = 0.45f;
-        addSparks(hitPos, 12, {1.0f, 0.88f, 0.32f});
-        addSparks(hitPos, 4, {0.55f, 1.0f, 0.92f});
+        headshotMarkerTimer_ = 0.58f;
+        addSparks(hitPos, 16, {1.0f, 0.88f, 0.32f});
+        addSparks(hitPos, 6, {0.55f, 1.0f, 0.92f});
         hitStop_ = std::max(hitStop_, 0.055f);
         triggerShake(0.16f, 0.08f);
     } else if (minicsTarget) {
-        addSparks(hitPos, 5, {1.0f, 0.45f, 0.24f});
+        addSparks(hitPos, 8, {1.0f, 0.45f, 0.24f});
+        addSparks(hitPos, 3, {1.0f, 0.85f, 0.35f});
         hitStop_ = std::max(hitStop_, 0.025f);
     }
     sfx("dummy_hit", headshot ? 1.18f : 1.0f);
@@ -1628,7 +1644,7 @@ void Game::triggerShake(float amplitude, float seconds) {
 //   * Glock damage / cadence .......... glock.cfg (34 / 0.14) + builtin
 //   * Magazine / reserve / reload ..... game.h magSize_/reloadDuration_,
 //                                       startMinicsRound() reserveAmmo_
-//   * Recoil kick / recovery .......... tryAttack() recoilPitch_, update() 11*dt
+//   * Recoil kick / recovery .......... tryAttack() recoilPitch_, update() 12.5*dt
 //   * Neon look / atmosphere .......... world_template.cpp minicsArena(),
 //                                       buildRenderFrame() atmosphere block
 // ===========================================================================
@@ -1653,6 +1669,8 @@ void Game::tryReload() {
         return;
     }
     reloadTimer_ = reloadDuration_;
+    reloadBeatTimer_ = 0.0f;
+    slideCycleTimer_ = muzzleFlashTimer_ = 0.0f;
     recoilPitch_ = recoilYaw_ = 0.0f; // hands leave the sights for the reload
     sfx("reload");
 }
@@ -1717,6 +1735,7 @@ void Game::startMinicsRound() {
     magAmmo_ = magSize_;
     reserveAmmo_ = 68;
     reloadTimer_ = recoilPitch_ = recoilYaw_ = adsBlend_ = 0.0f;
+    muzzleFlashTimer_ = slideCycleTimer_ = dryFireTimer_ = reloadBeatTimer_ = 0.0f;
     playerHealth_ = playerHealthShown_ = 100.0f;
     sinceDamaged_ = 999.0f;
     controlHintTimer_ = 6.0;
@@ -1781,7 +1800,7 @@ void Game::onMinicsEnemyKilled(const glm::vec3& at, bool headshot, float yaw,
     minicsKills_ += 1;
     if (headshot) minicsHeadshots_ += 1;
     minicsScore_ += headshot ? 150 : 100;
-    killMarkerTimer_ = 0.30f; // bigger crosshair X takes over from the hit tick
+    killMarkerTimer_ = 0.42f; // bigger crosshair X takes over from the hit tick
     hitMarkerTimer_ = 0.0f;
     sfx("kill_confirm");
     // A hot burst where the enemy fell + a floating score popup near the crosshair.
@@ -2203,6 +2222,9 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     // Combat and interaction (per frame, like mouse look, for minimal latency).
     attackCooldown_ = std::max(0.0f, attackCooldown_ - dt);
     muzzleFlashTimer_ = std::max(0.0f, muzzleFlashTimer_ - dt);
+    slideCycleTimer_ = std::max(0.0f, slideCycleTimer_ - dt);
+    dryFireTimer_ = std::max(0.0f, dryFireTimer_ - dt);
+    reloadBeatTimer_ = std::max(0.0f, reloadBeatTimer_ - dt);
     hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - dt);
     killMarkerTimer_ = std::max(0.0f, killMarkerTimer_ - dt);
     headshotMarkerTimer_ = std::max(0.0f, headshotMarkerTimer_ - dt);
@@ -2213,7 +2235,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
 
     // Recoil recovery: the view-punch springs back toward the crosshair. Fast
     // enough to feel snappy, slow enough that fast fire visibly climbs first.
-    float recover = std::min(1.0f, 11.0f * float(frameDt));
+    float recover = std::min(1.0f, 12.5f * float(frameDt));
     recoilPitch_ -= recoilPitch_ * recover;
     recoilYaw_ -= recoilYaw_ * recover;
 
@@ -2231,6 +2253,9 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
             int take = std::min(need, reserveAmmo_);
             magAmmo_ += take;
             reserveAmmo_ -= take;
+            reloadBeatTimer_ = 0.18f;
+            slideCycleTimer_ = 0.08f;
+            sfx("reload", 1.16f);
         }
     }
 
@@ -2300,7 +2325,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     if (inventory_.equippedId() != lastEquippedId_) {
         lastEquippedId_ = inventory_.equippedId();
         equipTimer_ = kEquipDuration;
-        muzzleFlashTimer_ = 0.0f;
+        muzzleFlashTimer_ = slideCycleTimer_ = dryFireTimer_ = reloadBeatTimer_ = 0.0f;
         recoilPitch_ = recoilYaw_ = adsBlend_ = 0.0f;
         reloadTimer_ = 0.0f;
         if (playerMelee_.phase != melee::Phase::Stagger) {
@@ -3233,8 +3258,19 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         const glm::vec4 adsCol(0.55f, 1.0f, 0.95f, 0.92f);
         const glm::vec4 chCol = glm::mix(baseCol, adsCol, adsBlend_ * 0.65f);
         const float chX = viewportW * 0.5f, chY = viewportH * 0.5f;
-        const float gap = glm::mix(5.0f, 3.2f, adsBlend_);
-        const float arm = glm::mix(7.0f, 5.0f, adsBlend_);
+        float shotBloom = usesAmmo()
+                              ? glm::clamp(recoilPitch_ * 0.45f +
+                                               (muzzleFlashTimer_ > 0.0f ? 3.0f : 0.0f),
+                                           0.0f, 7.0f)
+                              : 0.0f;
+        float moveBloom = usesAmmo()
+                              ? glm::clamp(player_.horizontalSpeed() /
+                                               std::max(0.1f, cfg_.runSpeed),
+                                           0.0f, 1.0f) *
+                                    glm::mix(3.0f, 0.8f, adsBlend_)
+                              : 0.0f;
+        const float gap = glm::mix(5.0f, 3.2f, adsBlend_) + shotBloom + moveBloom;
+        const float arm = glm::mix(7.0f, 5.0f, adsBlend_) + shotBloom * 0.25f;
         const float th = 2.0f;
         frame.rects.push_back({chX - gap - arm, chY - th * 0.5f, arm, th, chCol});
         frame.rects.push_back({chX + gap, chY - th * 0.5f, arm, th, chCol});
@@ -3264,8 +3300,13 @@ void Game::appendHudDraws(RenderFrame& frame) const {
     // Hit marker: four small squares around the crosshair while a hit
     // confirmation is live.
     if (hitMarkerTimer_ > 0.0f) {
-        const glm::vec4 red(1.0f, 0.25f, 0.2f, 0.95f);
+        const float k = glm::clamp(hitMarkerTimer_ / 0.18f, 0.0f, 1.0f);
+        const glm::vec4 red(1.0f, 0.24f, 0.20f, 0.70f + 0.25f * k);
         const float chY = viewportH * 0.5f;
+        frame.rects.push_back({cx - 1.5f, chY - 20.0f, 3.0f, 8.0f, red});
+        frame.rects.push_back({cx - 1.5f, chY + 12.0f, 3.0f, 8.0f, red});
+        frame.rects.push_back({cx - 20.0f, chY - 1.5f, 8.0f, 3.0f, red});
+        frame.rects.push_back({cx + 12.0f, chY - 1.5f, 8.0f, 3.0f, red});
         for (float sx : {-1.0f, 1.0f}) {
             for (float sy : {-1.0f, 1.0f}) {
                 frame.rects.push_back({cx + sx * 13.0f - 2.5f, chY + sy * 13.0f - 2.5f,
@@ -3459,7 +3500,7 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
 
     // Shared animation inputs: pistol recoil decays with the muzzle flash,
     // the equip raise runs after weapon switches.
-    float kick = muzzleFlashTimer_ > 0.0f ? muzzleFlashTimer_ / 0.07f : 0.0f;
+    float kick = muzzleFlashTimer_ > 0.0f ? muzzleFlashTimer_ / 0.085f : 0.0f;
     float lower = equipTimer_ > 0.0f ? equipTimer_ / kEquipDuration : 0.0f;
 
     // Melee animation offsets, driven by the shared combat actor's phase:
@@ -3583,27 +3624,52 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
         float ads = adsBlend_ * adsBlend_;
         float rprog = reloadTimer_ > 0.0f ? 1.0f - reloadTimer_ / reloadDuration_ : 0.0f;
         float reloadDip = reloadTimer_ > 0.0f ? std::sin(rprog * 3.14159265f) : 0.0f;
+        float slideP = slideCycleTimer_ > 0.0f
+                           ? 1.0f - slideCycleTimer_ / 0.12f
+                           : 1.0f;
+        slideP = glm::clamp(slideP, 0.0f, 1.0f);
+        float slideBack = std::sin(slideP * 3.14159265f) * 0.060f;
+        float dry = dryFireTimer_ > 0.0f ? dryFireTimer_ / 0.16f : 0.0f;
+        float ready = reloadBeatTimer_ > 0.0f ? reloadBeatTimer_ / 0.18f : 0.0f;
         glm::vec3 hipPos(0.15f, -0.145f, -0.38f);
         glm::vec3 adsPos(0.015f, -0.104f, -0.455f);
         glm::vec3 gunPos = glm::mix(hipPos, adsPos, ads)
                            + glm::vec3(0.0f, snap * glm::mix(0.014f, 0.006f, ads),
                                        kick * glm::mix(0.055f, 0.030f, ads))
+                           + glm::vec3(0.0f, dry * 0.006f - ready * 0.006f,
+                                       dry * 0.016f)
                            + glm::vec3(-0.02f * reloadDip, -0.17f * reloadDip,
                                        0.05f * reloadDip);
         glm::mat4 gun = vmCompose(root, gunPos,
                                   {snap * glm::mix(17.0f, 9.0f, ads) +
-                                       recoilPitch_ * glm::mix(1.0f, 0.55f, ads) - 2.0f,
+                                       recoilPitch_ * glm::mix(1.0f, 0.55f, ads) -
+                                       dry * 2.5f - 2.0f,
                                    glm::mix(-4.0f, 0.0f, ads) - reloadDip * 8.0f,
                                    glm::mix(-2.0f, 0.0f, ads) -
-                                       snap * glm::mix(4.0f, 1.5f, ads) - reloadDip * 26.0f});
+                                       snap * glm::mix(4.0f, 1.5f, ads) -
+                                       reloadDip * 26.0f + dry * 2.0f});
         // Slide, top rib, sights, frame.
-        box(gun, {0.0f, 0.043f, -0.055f}, {0, 0, 0}, {0.05f, 0.052f, 0.245f}, metalDark);
-        box(gun, {0.0f, 0.072f, -0.055f}, {0, 0, 0}, {0.036f, 0.012f, 0.245f}, metalMid);
-        box(gun, {0.0f, 0.086f, 0.058f}, {0, 0, 0}, {0.034f, 0.016f, 0.014f}, metalMid);
-        box(gun, {0.0f, 0.088f, -0.168f}, {0, 0, 0}, {0.010f, 0.018f, 0.012f}, metalMid);
+        glm::vec3 slideOff(0.0f, 0.0f, slideBack);
+        box(gun, slideOff + glm::vec3(0.0f, 0.043f, -0.055f), {0, 0, 0},
+            {0.05f, 0.052f, 0.245f}, metalDark);
+        box(gun, slideOff + glm::vec3(0.0f, 0.072f, -0.055f), {0, 0, 0},
+            {0.036f, 0.012f, 0.245f}, metalMid);
+        box(gun, slideOff + glm::vec3(0.0f, 0.086f, 0.058f), {0, 0, 0},
+            {0.034f, 0.016f, 0.014f}, metalMid);
+        box(gun, slideOff + glm::vec3(0.0f, 0.088f, -0.168f), {0, 0, 0},
+            {0.010f, 0.018f, 0.012f}, metalMid);
+        if (slideBack > 0.012f) {
+            box(gun, {0.028f, 0.074f, -0.062f + slideBack * 0.4f}, {0, 0, 0},
+                {0.014f, 0.014f, 0.045f}, {1.0f, 0.68f, 0.22f}, 0.45f);
+        }
         if (adsBlend_ > 0.25f) {
-            box(gun, {0.0f, 0.103f, -0.171f}, {0, 0, 0}, {0.016f, 0.010f, 0.010f},
+            box(gun, slideOff + glm::vec3(0.0f, 0.103f, -0.171f), {0, 0, 0},
+                {0.016f, 0.010f, 0.010f},
                 {0.30f, 1.0f, 0.92f}, 0.6f * adsBlend_);
+        }
+        if (ready > 0.0f) {
+            box(gun, {0.0f, 0.103f, -0.171f}, {0, 0, 0}, {0.024f, 0.014f, 0.012f},
+                {0.35f, 1.0f, 0.90f}, 0.75f * ready);
         }
         box(gun, {0.0f, -0.002f, -0.075f}, {0, 0, 0}, {0.046f, 0.038f, 0.19f}, metalMid);
         // Raked-back grip, mag base, trigger guard.
@@ -3627,11 +3693,19 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
                                          : 0.14f * (1.0f - (rprog - 0.5f) * 2.0f);
             box(gun, {-0.02f, -0.16f - magDrop, 0.06f}, {-16.0f, 0, 0},
                 {0.05f, 0.14f, 0.07f}, metalMid);
+            float handIn = glm::clamp((rprog - 0.30f) / 0.55f, 0.0f, 1.0f);
+            glm::vec3 magStart(-0.18f, -0.31f, 0.18f);
+            glm::vec3 magEnd(-0.03f, -0.18f, 0.075f);
+            glm::vec3 magPos = glm::mix(magStart, magEnd, handIn);
+            box(gun, magPos, {-16.0f, 0, -8.0f + handIn * 8.0f},
+                {0.045f, 0.135f, 0.065f}, metalDark);
+            box(gun, magPos + glm::vec3(-0.045f, -0.02f, 0.02f), {-16.0f, 0, 0},
+                {0.04f, 0.08f, 0.065f}, skin);
         }
         // Muzzle flash: a bright emissive star that flares big on the shot and
         // collapses to a white-hot core as the timer runs out.
         if (muzzleFlashTimer_ > 0.0f) {
-            float f = muzzleFlashTimer_ / 0.07f;   // 1 -> 0 across the flash
+            float f = muzzleFlashTimer_ / 0.085f;  // 1 -> 0 across the flash
             float s = 0.65f + 0.5f * f;            // flares wide, then shrinks
             box(gun, {0.0f, 0.043f, -0.235f}, {0, 0, 45.0f},
                 {0.085f * s, 0.085f * s, 0.05f}, {1.0f, 0.62f, 0.15f}, 1.0f); // amber petals
@@ -3939,7 +4013,13 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
             rect(x, pipY, 6.8f, 9.0f, c);
         }
         if (reloadTimer_ > 0.0f) {
+            float p = 1.0f - reloadTimer_ / std::max(0.01f, reloadDuration_);
             text(ax + 6.0f, ay - 34.0f, 2.0f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), "RELOADING");
+            rect(px + 18.0f, py + 13.0f, (panelW - 36.0f) * p, 4.0f,
+                 glm::vec4(1.0f, 0.70f, 0.22f, 0.95f));
+        } else if (reloadBeatTimer_ > 0.0f) {
+            float a = glm::clamp(reloadBeatTimer_ / 0.18f, 0.0f, 1.0f);
+            text(ax + 20.0f, ay - 34.0f, 2.0f, glm::vec4(0.35f, 1.0f, 0.90f, a), "READY");
         }
     }
     if (reloadTimer_ <= 0.0f && magAmmo_ == 0 && reserveAmmo_ > 0) {
@@ -3983,14 +4063,19 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
 
     // --- Kill marker: a bigger, brighter red X over the crosshair.
     if (killMarkerTimer_ > 0.0f) {
-        float k = killMarkerTimer_ / 0.30f;
+        float k = killMarkerTimer_ / 0.42f;
         float r = 15.0f + (1.0f - k) * 5.0f; // expands slightly as it fades
         glm::vec4 col(1.0f, 0.28f, 0.24f, glm::clamp(k + 0.2f, 0.0f, 1.0f));
+        rect(cx - 1.5f, cy - 24.0f, 3.0f, 13.0f, col);
+        rect(cx - 1.5f, cy + 11.0f, 3.0f, 13.0f, col);
+        rect(cx - 24.0f, cy - 1.5f, 13.0f, 3.0f, col);
+        rect(cx + 11.0f, cy - 1.5f, 13.0f, 3.0f, col);
         for (float sx : {-1.0f, 1.0f}) {
             for (float sy : {-1.0f, 1.0f}) {
                 frame.rects.push_back({cx + sx * r - 3.0f, cy + sy * r - 3.0f, 6.0f, 6.0f, col});
             }
         }
+        text(cx, cy + 30.0f, 1.8f, glm::vec4(1.0f, 0.70f, 0.36f, k), "ELIMINATED", true);
     }
     if (headshotMarkerTimer_ > 0.0f) {
         float k = glm::clamp(headshotMarkerTimer_ / 0.45f, 0.0f, 1.0f);
