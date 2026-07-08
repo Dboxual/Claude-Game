@@ -197,16 +197,18 @@ replacement, no new render features — just emissive + per-frame atmosphere.
   - `kMinicsRoundSeconds` (75 s round), countdown `minicsPhaseTimer_ = 2.0f`
     in `startMinicsRound`.
   - Enemy count + spawn spots: `placeMinicsEntities()` (5 `minics_bot`).
-  - Engage band `kMinicsEngageMin/Max` (6/15 m); speeds `3.1` (advance) / `2.5`
-    (strafe) in `updateMinicsEnemies`.
-  - Enemy fire: cadence `0.85 + rf()*0.95` (`updateMinicsEnemies`); accuracy
-    `0.90 - dist*0.020` and damage `8 + rand*5` (`minicsEnemyFire`).
+  - Engage band `kMinicsEngageMin/Max` (5.5/17.5 m); speeds `4.2` / `3.65`
+    lane pressure and `2.75` strafe in `updateMinicsEnemies`.
+  - Enemy fire: cadence `0.72 + rf()*0.72` (`updateMinicsEnemies`); accuracy
+    `0.82 - dist*0.018 - movePenalty` and damage `7 + rand*4`
+    (`minicsEnemyFire`).
 - **Enemy toughness** — `server/content/entities/minics_bot.cfg`
   (`max_health = 90`) and the matching `content.cpp` builtin.
 - **Gun** — `server/content/weapons/glock.cfg` (`damage = 34`,
   `cooldown = 0.14`) + builtin; magazine `magSize_ = 17`, `reserveAmmo_ = 68`,
-  `reloadDuration_ = 1.45f`, recoil kick `recoilPitch_ += 0.62..0.92` and
-  recovery `11.0f * dt` (all in `game.{h,cpp}`).
+  `reloadDuration_ = 1.25f`, ADS blend `adsBlend_`, recoil kick
+  `recoilPitch_ += 0.48..0.94` and recovery `11.0f * dt` (all in
+  `game.{h,cpp}`).
 - **Enemy look** — `appendMinicsEnemyDraws` (body boxes, aim pose, walk swing).
 
 ## Build / run

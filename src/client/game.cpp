@@ -73,6 +73,38 @@ bool contains(float px, float py, float x, float y, float w, float h) {
     return px >= x && px < x + w && py >= y && py < y + h;
 }
 
+float rayVsAabbLocal(const glm::vec3& origin, const glm::vec3& dir, const AABB& box) {
+    float tMin = 0.0f;
+    float tMax = 1.0e9f;
+    for (int axis = 0; axis < 3; ++axis) {
+        float o = axis == 0 ? origin.x : axis == 1 ? origin.y : origin.z;
+        float d = axis == 0 ? dir.x : axis == 1 ? dir.y : dir.z;
+        float mn = axis == 0 ? box.min.x : axis == 1 ? box.min.y : box.min.z;
+        float mx = axis == 0 ? box.max.x : axis == 1 ? box.max.y : box.max.z;
+        if (std::abs(d) < 1.0e-6f) {
+            if (o < mn || o > mx) return -1.0f;
+            continue;
+        }
+        float invD = 1.0f / d;
+        float t1 = (mn - o) * invD;
+        float t2 = (mx - o) * invD;
+        if (t1 > t2) std::swap(t1, t2);
+        tMin = std::max(tMin, t1);
+        tMax = std::min(tMax, t2);
+        if (tMin > tMax) return -1.0f;
+    }
+    return tMin >= 0.0f ? tMin : tMax;
+}
+
+glm::vec3 directionWithOffsets(glm::vec3 dir, float yawOffset, float pitchOffset) {
+    dir = glm::normalize(dir);
+    float yaw = std::atan2(dir.x, -dir.z) + yawOffset;
+    float pitch = std::asin(glm::clamp(dir.y, -1.0f, 1.0f)) + pitchOffset;
+    pitch = glm::clamp(pitch, glm::radians(-89.0f), glm::radians(89.0f));
+    return glm::vec3(std::sin(yaw) * std::cos(pitch), std::sin(pitch),
+                     -std::cos(yaw) * std::cos(pitch));
+}
+
 std::string toUpperAscii(std::string s) {
     for (char& c : s) {
         if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
@@ -237,12 +269,13 @@ void Game::beginSession() {
     // MiniCS + gun feel reset (a fresh session is never mid-round or mid-reload).
     minicsActive_ = false;
     minicsBrains_.clear();
+    minicsDeaths_.clear();
     scorePopups_.clear();
-    minicsScore_ = minicsKills_ = 0;
+    minicsScore_ = minicsKills_ = minicsHeadshots_ = 0;
     minicsEnemiesTotal_ = minicsEnemiesAlive_ = 0;
-    killMarkerTimer_ = hurtTimer_ = 0.0f;
+    killMarkerTimer_ = headshotMarkerTimer_ = hurtTimer_ = 0.0f;
     magAmmo_ = reserveAmmo_ = 0;
-    reloadTimer_ = recoilPitch_ = recoilYaw_ = 0.0f;
+    reloadTimer_ = recoilPitch_ = recoilYaw_ = adsBlend_ = 0.0f;
     swayX_ = swayY_ = landDipTimer_ = landDipAmount_ = 0.0f;
     wasGrounded_ = true;
     controlHintTimer_ = 8.0; // a few seconds of "here's how to play"
@@ -956,7 +989,16 @@ void Game::tryAttack() {
     else sfx("gunshot", 0.96f + rand01() * 0.08f);
 
     const glm::vec3 eye = eyePosition();
-    const glm::vec3 dir = lookDirection();
+    glm::vec3 dir = lookDirection();
+    if (usesAmmo()) {
+        float moveFrac = glm::clamp(player_.horizontalSpeed() / std::max(0.1f, cfg_.runSpeed),
+                                    0.0f, 1.0f);
+        float hipSpread = 0.10f + moveFrac * 0.10f;
+        float spreadDeg = glm::mix(hipSpread, 0.025f, adsBlend_);
+        float cone = glm::radians(spreadDeg);
+        dir = directionWithOffsets(dir, (rand01() - 0.5f) * 2.0f * cone,
+                                   (rand01() - 0.5f) * 2.0f * cone);
+    }
     float geoT = world_.raycastGeometry(eye, dir, weapon->range);
     World::EntityHit hit =
         world_.raycastEntities(eye, dir, geoT, World::RayMask::AttackTargets);
@@ -982,8 +1024,9 @@ void Game::tryAttack() {
     // Recoil view-punch AFTER the round leaves: the muzzle snaps up and a hair
     // sideways, then recovers in update(). Capped so it never spins the camera.
     if (usesAmmo()) {
-        recoilPitch_ = std::min(7.0f, recoilPitch_ + 0.62f + rand01() * 0.30f);
-        recoilYaw_ += (rand01() - 0.5f) * 0.55f;
+        float pitchKick = glm::mix(0.72f, 0.48f, adsBlend_) + rand01() * 0.22f;
+        recoilPitch_ = std::min(7.0f, recoilPitch_ + pitchKick);
+        recoilYaw_ += (rand01() - 0.5f) * glm::mix(0.58f, 0.24f, adsBlend_);
     }
     if (hit.index < 0) return;
 
@@ -993,23 +1036,59 @@ void Game::tryAttack() {
     std::string targetId = target.defId;
     unsigned targetEid = target.id;
     glm::vec3 targetPos = target.pos;
-    hitMarkerTimer_ = 0.12f;
-    sfx("dummy_hit");
-    // A struck MiniCS enemy flinches: interrupt its aim and make it reel.
+    glm::vec3 hitPos = eye + dir * hit.t;
+    glm::vec3 knockDir = targetPos - player_.pos;
+    knockDir.y = 0.0f;
+    float knockLen = glm::length(knockDir);
+    knockDir = knockLen > 0.01f ? knockDir / knockLen : glm::vec3(0.0f, 0.0f, 1.0f);
+
     auto brainIt = minicsBrains_.find(targetEid);
+    bool minicsTarget = brainIt != minicsBrains_.end();
+    float brainYaw = minicsTarget ? brainIt->second.yaw : 0.0f;
+    bool headshot = false;
+    if (minicsTarget) {
+        AABB headBox;
+        headBox.min = target.pos + glm::vec3(-0.22f, 1.36f, -0.22f);
+        headBox.max = target.pos + glm::vec3(0.22f, 1.84f, 0.22f);
+        float headT = rayVsAabbLocal(eye, dir, headBox);
+        headshot = headT >= 0.0f && headT <= geoT + 0.02f;
+        if (headshot) hitPos = eye + dir * headT;
+    }
+    if (headshot && !tracers_.empty()) {
+        Tracer& last = tracers_.back();
+        last.to = hitPos;
+        float headDist = glm::length(last.to - last.from);
+        last.life = last.total = std::max(0.02f, headDist / 130.0f);
+    }
+
+    hitMarkerTimer_ = 0.12f;
+    if (headshot) {
+        headshotMarkerTimer_ = 0.45f;
+        addSparks(hitPos, 12, {1.0f, 0.88f, 0.32f});
+        addSparks(hitPos, 4, {0.55f, 1.0f, 0.92f});
+        hitStop_ = std::max(hitStop_, 0.055f);
+        triggerShake(0.16f, 0.08f);
+    } else if (minicsTarget) {
+        addSparks(hitPos, 5, {1.0f, 0.45f, 0.24f});
+        hitStop_ = std::max(hitStop_, 0.025f);
+    }
+    sfx("dummy_hit", headshot ? 1.18f : 1.0f);
+    // A struck MiniCS enemy flinches: interrupt its aim and make it reel.
     if (brainIt != minicsBrains_.end()) {
         brainIt->second.state = MinicsEnemy::State::Flinch;
-        brainIt->second.flinchTimer = std::max(brainIt->second.flinchTimer, 0.22f);
-        brainIt->second.aimBlend *= 0.4f;
+        brainIt->second.flinchTimer =
+            std::max(brainIt->second.flinchTimer, headshot ? 0.34f : 0.22f);
+        brainIt->second.aimBlend *= headshot ? 0.15f : 0.4f;
     }
-    bool destroyed = world_.damageEntity(hit.index, weapon->damage);
+    float damage = weapon->damage * (headshot ? 2.15f : 1.0f);
+    bool destroyed = world_.damageEntity(hit.index, damage);
     aimInteract_ = {};
     aimInfo_ = {}; // entity vector may have shifted; refreshed next frame
     if (destroyed) {
         bots_.erase(targetEid); // a respawned duelist starts with a fresh brain
         mobs_.erase(targetEid);
         if (minicsBrains_.erase(targetEid) > 0) {
-            onMinicsEnemyKilled(targetPos); // score + kill confirm + popup
+            onMinicsEnemyKilled(targetPos, headshot, brainYaw, knockDir); // score + kill feedback
         } else {
             spawnLootDrop(targetId, targetPos);
             const EntityDef* def = content_.find(targetId);
@@ -1540,9 +1619,11 @@ void Game::triggerShake(float amplitude, float seconds) {
 //                                       countdown = startMinicsRound()'s 2.0f
 //   * Enemy count + spawn spots ....... placeMinicsEntities()
 //   * Enemy engage range .............. kMinicsEngageMin/Max (below)
-//   * Enemy speed / fire cadence ...... updateMinicsEnemies() (3.1 / 2.5 m/s;
-//                                       fireCooldown 0.85 + rf()*0.95)
-//   * Enemy accuracy + damage ......... minicsEnemyFire() (acc, 8 + rand*5)
+//   * Enemy speed / fire cadence ...... updateMinicsEnemies() (lane pressure
+//                                       4.2/3.65, strafe 2.75 m/s;
+//                                       fireCooldown 0.72 + rf()*0.72)
+//   * Enemy accuracy + damage ......... minicsEnemyFire() (distance/move accuracy,
+//                                       7 + rand*4)
 //   * Enemy toughness ................. minics_bot.cfg max_health (90) + builtin
 //   * Glock damage / cadence .......... glock.cfg (34 / 0.14) + builtin
 //   * Magazine / reserve / reload ..... game.h magSize_/reloadDuration_,
@@ -1553,8 +1634,8 @@ void Game::triggerShake(float amplitude, float seconds) {
 // ===========================================================================
 namespace {
 constexpr float kMinicsRoundSeconds = 75.0f; // round clock during the fight
-constexpr float kMinicsEngageMin = 6.0f;     // enemies try to hold this range...
-constexpr float kMinicsEngageMax = 15.0f;    // ...and close/open toward it
+constexpr float kMinicsEngageMin = 5.5f;     // enemies try to hold this range...
+constexpr float kMinicsEngageMax = 17.5f;    // ...and close/open toward it
 } // namespace
 
 bool Game::usesAmmo() const {
@@ -1588,6 +1669,8 @@ void Game::placeMinicsEntities() {
     place("neon_pillar", {-6.5f, 0.0f, 0.0f});
     place("neon_pillar", {6.5f, 0.0f, 0.0f});
     place("neon_pillar", {0.0f, 0.0f, -18.5f});
+    place("neon_pillar", {-13.8f, 0.0f, 9.5f});
+    place("neon_pillar", {13.8f, 0.0f, 9.5f});
     // Five enemies spread across the north lanes and the mid platform edges.
     place("minics_bot", {-8.0f, 0.0f, -12.0f});
     place("minics_bot", {8.0f, 0.0f, -13.0f});
@@ -1599,10 +1682,13 @@ void Game::placeMinicsEntities() {
 void Game::startMinicsRound() {
     minicsActive_ = true;
     minicsBrains_.clear();
+    minicsDeaths_.clear();
     scorePopups_.clear();
     minicsScore_ = 0;
     minicsKills_ = 0;
+    minicsHeadshots_ = 0;
     minicsResultNote_.clear();
+    killMarkerTimer_ = headshotMarkerTimer_ = hurtTimer_ = 0.0f;
 
     // One brain per placed enemy; count them for the win condition.
     int count = 0;
@@ -1613,6 +1699,11 @@ void Game::startMinicsRound() {
         brain.yaw = std::atan2(player_.pos.x - e.pos.x, -(player_.pos.z - e.pos.z));
         brain.stateTimer = 0.4f + float(brain.rng % 100u) * 0.006f;
         brain.strafeSign = (brain.rng & 1u) ? 1.0f : -1.0f;
+        float side = e.pos.x < -2.0f ? -1.0f : e.pos.x > 2.0f ? 1.0f : brain.strafeSign;
+        brain.laneX = side * (7.4f + float((brain.rng >> 8) % 180u) * 0.01f);
+        brain.laneDrift = (float((brain.rng >> 17) % 1000u) / 1000.0f - 0.5f) * 1.1f;
+        brain.repathTimer = 0.25f + float((brain.rng >> 5) % 100u) * 0.01f;
+        brain.fireCooldown = 0.35f + float((brain.rng >> 12) % 100u) * 0.009f;
         minicsBrains_[e.id] = brain;
         ++count;
     }
@@ -1625,7 +1716,7 @@ void Game::startMinicsRound() {
     // Fresh magazine + reserve for the round; clear any carried recoil/reload.
     magAmmo_ = magSize_;
     reserveAmmo_ = 68;
-    reloadTimer_ = recoilPitch_ = recoilYaw_ = 0.0f;
+    reloadTimer_ = recoilPitch_ = recoilYaw_ = adsBlend_ = 0.0f;
     playerHealth_ = playerHealthShown_ = 100.0f;
     sinceDamaged_ = 999.0f;
     controlHintTimer_ = 6.0;
@@ -1685,17 +1776,31 @@ void Game::minicsLose(const char* reason) {
     sfx("round_lose");
 }
 
-void Game::onMinicsEnemyKilled(const glm::vec3& at) {
+void Game::onMinicsEnemyKilled(const glm::vec3& at, bool headshot, float yaw,
+                               const glm::vec3& knockDir) {
     minicsKills_ += 1;
-    minicsScore_ += 100;
+    if (headshot) minicsHeadshots_ += 1;
+    minicsScore_ += headshot ? 150 : 100;
     killMarkerTimer_ = 0.30f; // bigger crosshair X takes over from the hit tick
     hitMarkerTimer_ = 0.0f;
     sfx("kill_confirm");
-    // A hot burst where the enemy fell + a floating "+100" near the crosshair.
-    addSparks(at + glm::vec3(0.0f, 0.9f, 0.0f), 16, {1.0f, 0.5f, 0.22f});
-    addSparks(at + glm::vec3(0.0f, 1.2f, 0.0f), 8, {1.0f, 0.85f, 0.4f});
-    addScorePopup("+100", {1.0f, 0.9f, 0.4f});
-    triggerShake(0.25f, 0.12f);
+    // A hot burst where the enemy fell + a floating score popup near the crosshair.
+    addSparks(at + glm::vec3(0.0f, 0.9f, 0.0f), headshot ? 22 : 16,
+              headshot ? glm::vec3(1.0f, 0.9f, 0.34f) : glm::vec3(1.0f, 0.5f, 0.22f));
+    addSparks(at + glm::vec3(0.0f, 1.2f, 0.0f), headshot ? 12 : 8,
+              headshot ? glm::vec3(0.45f, 1.0f, 0.95f) : glm::vec3(1.0f, 0.85f, 0.4f));
+    addScorePopup(headshot ? "+150 HEADSHOT" : "+100", headshot ? glm::vec3(1.0f, 0.84f, 0.32f)
+                                                                  : glm::vec3(1.0f, 0.9f, 0.4f));
+    triggerShake(headshot ? 0.34f : 0.25f, headshot ? 0.16f : 0.12f);
+
+    MinicsDeathFx fx;
+    fx.pos = at;
+    fx.knockDir = glm::length(knockDir) > 0.01f ? glm::normalize(knockDir)
+                                                : glm::vec3(0.0f, 0.0f, 1.0f);
+    fx.yaw = yaw;
+    fx.life = fx.total = headshot ? 1.10f : 0.95f;
+    fx.headshot = headshot;
+    minicsDeaths_.push_back(fx);
 }
 
 void Game::addScorePopup(std::string text, const glm::vec3& color) {
@@ -1707,10 +1812,10 @@ void Game::addScorePopup(std::string text, const glm::vec3& color) {
     scorePopups_.push_back(std::move(p));
 }
 
-// Deliberately small ranged brain: advance to a firing range, strafe to stay
-// hard to hit, pause to aim (a readable telegraph), fire one shot, repeat.
-// No pathfinding - enemies move in straight lines, slide off walls, and settle
-// onto whatever is underfoot. Movement mutates positions through stable ids.
+// Compact ranged brain: advance through assigned flank lanes, strafe once in
+// range, pause to aim (a readable telegraph), fire one shot, repeat. This is
+// not full pathfinding, but the lane targets are enough to route around the
+// mid platform and pressure a player camping the south spawn.
 void Game::updateMinicsEnemies(float dt) {
     if (!minicsActive_ || minicsPhase_ != MiniCSPhase::Live) return;
     const glm::vec3 playerEye = eyePosition();
@@ -1733,6 +1838,7 @@ void Game::updateMinicsEnemies(float dt) {
         b.fireCooldown = std::max(0.0f, b.fireCooldown - dt);
         b.muzzle = std::max(0.0f, b.muzzle - dt);
         b.stateTimer -= dt;
+        b.repathTimer = std::max(0.0f, b.repathTimer - dt);
 
         glm::vec3 chest = e->pos + glm::vec3(0.0f, e->size.y * 0.82f, 0.0f);
         glm::vec3 toPlayer = player_.pos - e->pos;
@@ -1747,6 +1853,14 @@ void Game::updateMinicsEnemies(float dt) {
         bool los = world_.raycastGeometry(chest, eyeDir, eyeDist) >= eyeDist - 0.3f;
 
         float desiredYaw = std::atan2(toPlayer.x, -toPlayer.z);
+        float pressureZ = glm::clamp(player_.pos.z - 6.0f, 5.0f, 12.5f);
+        float laneX = glm::clamp(b.laneX + b.laneDrift, -12.5f, 12.5f);
+        bool playerHoldingSouth = player_.pos.z > 9.0f;
+        bool nearMidBlock = std::abs(e->pos.x) < 5.4f && e->pos.z > -7.0f && e->pos.z < 7.2f;
+        bool needsLaneRoute = !los || dist > kMinicsEngageMax ||
+                              (playerHoldingSouth && e->pos.z < pressureZ - 0.8f) ||
+                              nearMidBlock;
+        glm::vec3 laneTarget(laneX, e->pos.y, pressureZ);
 
         using State = MinicsEnemy::State;
         if (b.flinchTimer > 0.0f) {
@@ -1759,9 +1873,9 @@ void Game::updateMinicsEnemies(float dt) {
                 break;
             case State::Advance:
                 if (los && dist <= kMinicsEngageMax && dist >= kMinicsEngageMin &&
-                    b.fireCooldown <= 0.0f) {
+                    b.fireCooldown <= 0.0f && !needsLaneRoute) {
                     b.state = State::Aim;
-                    b.stateTimer = 0.32f + rf() * 0.22f;
+                    b.stateTimer = 0.26f + rf() * 0.18f;
                 } else if (los && dist < kMinicsEngageMin) {
                     b.state = State::Strafe;
                     b.stateTimer = 0.5f + rf() * 0.5f;
@@ -1769,9 +1883,11 @@ void Game::updateMinicsEnemies(float dt) {
                 break;
             case State::Strafe:
                 if (b.stateTimer <= 0.0f) {
-                    if (los && b.fireCooldown <= 0.0f && dist <= kMinicsEngageMax) {
+                    if (needsLaneRoute) {
+                        b.state = State::Advance;
+                    } else if (los && b.fireCooldown <= 0.0f && dist <= kMinicsEngageMax) {
                         b.state = State::Aim;
-                        b.stateTimer = 0.32f + rf() * 0.22f;
+                        b.stateTimer = 0.26f + rf() * 0.18f;
                     } else if (!los || dist > kMinicsEngageMax) {
                         b.state = State::Advance;
                     } else {
@@ -1781,15 +1897,18 @@ void Game::updateMinicsEnemies(float dt) {
                 }
                 break;
             case State::Aim:
-                if (b.stateTimer <= 0.0f) b.state = los ? State::Fire : State::Advance;
+                if (b.stateTimer <= 0.0f) {
+                    b.state = (los && dist <= kMinicsEngageMax + 1.5f) ? State::Fire
+                                                                        : State::Advance;
+                }
                 break;
             case State::Fire:
                 minicsEnemyFire(*e);
-                b.fireCooldown = 0.85f + rf() * 0.95f;
+                b.fireCooldown = 0.72f + rf() * 0.72f;
                 b.muzzle = 0.07f;
                 b.strafeSign = rf() < 0.5f ? -1.0f : 1.0f;
                 b.state = State::Strafe;
-                b.stateTimer = 0.45f + rf() * 0.6f;
+                b.stateTimer = 0.38f + rf() * 0.55f;
                 break;
             }
         }
@@ -1800,35 +1919,61 @@ void Game::updateMinicsEnemies(float dt) {
         bool aiming = (b.state == State::Aim || b.state == State::Fire);
         if (b.flinchTimer <= 0.0f && !aiming) {
             if (b.state == State::Advance) {
-                move = fwd + side * b.strafeSign * 0.4f;
-                speed = 3.1f;
+                glm::vec3 route = laneTarget - e->pos;
+                route.y = 0.0f;
+                if (!needsLaneRoute || glm::length(route) < 0.6f) route = toPlayer;
+                move = route + side * b.strafeSign * 0.18f;
+                speed = playerHoldingSouth ? 4.2f : 3.65f;
             } else if (b.state == State::Strafe) {
                 move = side * b.strafeSign;
                 if (dist < kMinicsEngageMin) move -= fwd * 0.8f;
                 else if (dist > kMinicsEngageMax) move += fwd * 0.8f;
-                speed = 2.5f;
+                if (playerHoldingSouth && e->pos.z < 8.0f) move += fwd * 0.35f;
+                speed = 2.75f;
             }
         }
         if (speed > 0.0f && glm::length(move) > 0.01f) {
+            for (unsigned otherId : ids) {
+                if (otherId == id) continue;
+                const WorldEntity* other = world_.entityById(otherId);
+                if (!other || !other->active) continue;
+                glm::vec3 away = e->pos - other->pos;
+                away.y = 0.0f;
+                float d = glm::length(away);
+                if (d > 0.01f && d < 1.35f) move += (away / d) * ((1.35f - d) * 1.2f);
+            }
             move = glm::normalize(move);
             float stepLen = speed * dt;
-            glm::vec3 probe = e->pos + glm::vec3(0.0f, 0.6f, 0.0f);
-            float wall = world_.raycastGeometry(probe, move, stepLen + 0.5f);
-            if (wall > stepLen + 0.45f) {
-                glm::vec3 next = e->pos + move * stepLen;
+            auto tryStep = [&](glm::vec3 dir) {
+                if (glm::length(dir) <= 0.01f) return false;
+                dir = glm::normalize(dir);
+                glm::vec3 probe = e->pos + glm::vec3(0.0f, 0.7f, 0.0f);
+                float wall = world_.raycastGeometry(probe, dir, stepLen + 0.55f);
+                if (wall <= stepLen + 0.48f) return false;
+                glm::vec3 next = e->pos + dir * stepLen;
                 next.x = glm::clamp(next.x, -16.6f, 16.6f);
                 next.z = glm::clamp(next.z, -20.6f, 20.6f);
                 glm::vec3 from = next + glm::vec3(0.0f, 1.0f, 0.0f);
                 float down = world_.raycastGeometry(from, glm::vec3(0, -1, 0), 3.0f);
                 if (down < 3.0f) next.y = from.y - down + 0.005f;
                 e->pos = next;
+                return true;
+            };
+            glm::vec3 laneDir(laneX - e->pos.x, 0.0f, 0.0f);
+            bool moved = tryStep(move) || (needsLaneRoute && tryStep(laneDir)) ||
+                         tryStep(side * b.strafeSign);
+            if (moved) {
                 b.walkPhase += speed * 1.7f * dt;
                 b.walkAmt += (1.0f - b.walkAmt) * std::min(1.0f, 8.0f * dt);
             } else {
-                // Wall/cover ahead: sidestep around it instead of grinding in.
+                // Wall/cover ahead: switch lane, then strafe for a beat.
                 if (b.state == State::Advance) {
                     b.state = State::Strafe;
                     b.stateTimer = 0.4f + rf() * 0.4f;
+                }
+                if (b.repathTimer <= 0.0f) {
+                    b.laneX = -b.laneX;
+                    b.repathTimer = 1.0f + rf() * 0.5f;
                 }
                 b.strafeSign = -b.strafeSign;
                 b.walkAmt += (0.0f - b.walkAmt) * std::min(1.0f, 8.0f * dt);
@@ -1861,7 +2006,9 @@ void Game::minicsEnemyFire(WorldEntity& e) {
 
     // Accuracy falls off with range; a miss still whips a tracer past you so
     // incoming fire is always legible (and adds pressure without the damage).
-    float acc = glm::clamp(0.90f - dist * 0.020f, 0.30f, 0.85f);
+    float movePenalty = glm::clamp(player_.horizontalSpeed() / std::max(0.1f, cfg_.runSpeed),
+                                   0.0f, 1.0f) * 0.08f;
+    float acc = glm::clamp(0.82f - dist * 0.018f - movePenalty, 0.26f, 0.76f);
     bool hit = rand01() < acc;
 
     glm::vec3 impact = playerEye;
@@ -1888,7 +2035,7 @@ void Game::minicsEnemyFire(WorldEntity& e) {
         hurtTimer_ = 0.85f;
         damageFlash_ = std::max(damageFlash_, 0.5f);
         triggerShake(0.4f, 0.16f);
-        damagePlayer(8.0f + rand01() * 5.0f);
+        damagePlayer(7.0f + rand01() * 4.0f);
     }
 }
 
@@ -2010,8 +2157,10 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     pin.moveRight = in.moveRight;
     pin.yaw = yaw_;
     pin.crouch = in.crouchHeld;
-    // A raised shield weighs on you: guard up with a shield forces walk speed.
-    pin.walk = in.walkHeld || (hasShield_ && melee::guardUp(playerMelee_));
+    // A raised shield weighs on you; the MiniCS Glock ADS stance also trades
+    // speed for a steadier sight picture.
+    pin.walk = in.walkHeld || (hasShield_ && melee::guardUp(playerMelee_)) ||
+               (usesAmmo() && in.blockHeld);
 
     accumulator_ += simDt;
     int tickSafety = 0;
@@ -2056,6 +2205,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     muzzleFlashTimer_ = std::max(0.0f, muzzleFlashTimer_ - dt);
     hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - dt);
     killMarkerTimer_ = std::max(0.0f, killMarkerTimer_ - dt);
+    headshotMarkerTimer_ = std::max(0.0f, headshotMarkerTimer_ - dt);
     hurtTimer_ = std::max(0.0f, hurtTimer_ - dt);
     shakeTime_ = std::max(0.0f, shakeTime_ - dt);
     damageFlash_ = std::max(0.0f, damageFlash_ - dt * 1.8f);
@@ -2066,6 +2216,12 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     float recover = std::min(1.0f, 11.0f * float(frameDt));
     recoilPitch_ -= recoilPitch_ * recover;
     recoilYaw_ -= recoilYaw_ * recover;
+
+    float adsTarget = (usesAmmo() && in.blockHeld && reloadTimer_ <= 0.0f &&
+                       minicsPhase_ == MiniCSPhase::Live)
+                          ? 1.0f
+                          : 0.0f;
+    adsBlend_ += (adsTarget - adsBlend_) * std::min(1.0f, 14.0f * float(frameDt));
 
     // Reload: the magazine refills from reserve when the animation completes.
     if (reloadTimer_ > 0.0f) {
@@ -2082,6 +2238,11 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
     for (size_t i = 0; i < scorePopups_.size();) {
         scorePopups_[i].life -= float(frameDt);
         if (scorePopups_[i].life <= 0.0f) scorePopups_.erase(scorePopups_.begin() + long(i));
+        else ++i;
+    }
+    for (size_t i = 0; i < minicsDeaths_.size();) {
+        minicsDeaths_[i].life -= float(frameDt);
+        if (minicsDeaths_[i].life <= 0.0f) minicsDeaths_.erase(minicsDeaths_.begin() + long(i));
         else ++i;
     }
 
@@ -2140,7 +2301,7 @@ void Game::update(const InputState& in, double frameDt, int viewportW, int viewp
         lastEquippedId_ = inventory_.equippedId();
         equipTimer_ = kEquipDuration;
         muzzleFlashTimer_ = 0.0f;
-        recoilPitch_ = recoilYaw_ = 0.0f;
+        recoilPitch_ = recoilYaw_ = adsBlend_ = 0.0f;
         reloadTimer_ = 0.0f;
         if (playerMelee_.phase != melee::Phase::Stagger) {
             playerMelee_.phase = melee::Phase::Idle;
@@ -2684,7 +2845,8 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         frame.view = glm::lookAt(eye, glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     }
     float aspect = viewportH > 0 ? float(viewportW) / float(viewportH) : 1.0f;
-    frame.proj = glm::perspective(glm::radians(settings_.fovDegrees), aspect, 0.05f, 300.0f);
+    float worldFov = settings_.fovDegrees - adsBlend_ * 5.0f;
+    frame.proj = glm::perspective(glm::radians(worldFov), aspect, 0.05f, 300.0f);
     // Fixed FOV for the first-person viewmodel so hands keep their size and
     // shape no matter what world FOV the player runs.
     frame.viewmodelProj = glm::perspective(glm::radians(58.0f), aspect, 0.02f, 8.0f);
@@ -2699,6 +2861,19 @@ RenderFrame Game::buildRenderFrame(int viewportW, int viewportH) const {
         draw.checkerTop = wb.checkerTop;
         draw.emissive = wb.emissive; // neon/LED accent strips glow through fog
         frame.boxes.push_back(draw);
+    }
+    if (currentWorldType_ == "minics_arena") {
+        float sweep = std::fmod(float(menuTime_) * 6.5f, 24.0f);
+        for (float laneX : {-8.95f, 0.0f, 8.95f}) {
+            float z = 13.5f - sweep;
+            BoxDraw pulse;
+            pulse.center = {laneX, 0.035f, z};
+            pulse.size = {laneX == 0.0f ? 0.62f : 0.46f, 0.025f, 0.75f};
+            pulse.color = laneX == 0.0f ? glm::vec3(0.35f, 1.0f, 0.92f)
+                                        : glm::vec3(1.0f, 0.24f, 0.78f);
+            pulse.emissive = 1.0f;
+            frame.boxes.push_back(pulse);
+        }
     }
 
     // World-space oriented boxes: spinning weapon pickups, duelist bot
@@ -3010,9 +3185,15 @@ void Game::appendHudDraws(RenderFrame& frame) const {
 
     // Crosshair: four thin drawn arms with a gap (not a font glyph).
     {
-        const glm::vec4 chCol(1.0f, 1.0f, 1.0f, 0.85f);
+        const glm::vec4 baseCol = headshotMarkerTimer_ > 0.0f
+                                      ? glm::vec4(1.0f, 0.82f, 0.22f, 0.95f)
+                                      : glm::vec4(1.0f, 1.0f, 1.0f, 0.85f);
+        const glm::vec4 adsCol(0.55f, 1.0f, 0.95f, 0.92f);
+        const glm::vec4 chCol = glm::mix(baseCol, adsCol, adsBlend_ * 0.65f);
         const float chX = viewportW * 0.5f, chY = viewportH * 0.5f;
-        const float gap = 5.0f, arm = 7.0f, th = 2.0f;
+        const float gap = glm::mix(5.0f, 3.2f, adsBlend_);
+        const float arm = glm::mix(7.0f, 5.0f, adsBlend_);
+        const float th = 2.0f;
         frame.rects.push_back({chX - gap - arm, chY - th * 0.5f, arm, th, chCol});
         frame.rects.push_back({chX + gap, chY - th * 0.5f, arm, th, chCol});
         frame.rects.push_back({chX - th * 0.5f, chY - gap - arm, th, arm, chCol});
@@ -3078,7 +3259,10 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         const WorldEntity& e = world_.entities()[size_t(aimInfo_.index)];
         const EntityDef* def = content_.find(e.defId);
         auto botIt = bots_.find(e.id);
-        if (botIt != bots_.end()) {
+        bool showInfo = true;
+        if (minicsActive_ && e.defId == "minics_bot") {
+            showInfo = false; // MiniCS uses markers/sparks/flinch instead of a health label.
+        } else if (botIt != bots_.end()) {
             const melee::Actor& B = botIt->second.actor;
             char state[48] = "";
             if (B.phase == melee::Phase::Stagger) {
@@ -3099,7 +3283,7 @@ void Game::appendHudDraws(RenderFrame& frame) const {
                           toUpperAscii(def ? def->displayName : e.defId).c_str(),
                           int(std::ceil(e.health)), int(e.maxHealth));
         }
-        centeredLine(viewportH * 0.5f + 34.0f, 2.0f, dim, info);
+        if (showInfo) centeredLine(viewportH * 0.5f + 34.0f, 2.0f, dim, info);
     }
 
     // Transient gameplay message (pickups, kills).
@@ -3120,7 +3304,8 @@ void Game::appendHudDraws(RenderFrame& frame) const {
         if (sandboxMode_) {
             hint = "WASD MOVE   E INTERACT   LMB ATTACK   TAB INVENTORY   B BUILD MENU   ESC MENU";
         } else if (hw && hw->kind == WeaponKind::Hitscan) {
-            hint = "WASD MOVE   MOUSE AIM   LMB FIRE   R RELOAD   ESC MENU";
+            hint = minicsActive_ ? "WASD MOVE   MOUSE AIM   LMB FIRE   RMB AIM   R RELOAD   ESC MENU"
+                                 : "WASD MOVE   MOUSE AIM   LMB FIRE   R RELOAD   ESC MENU";
         } else {
             hint = "WASD MOVE   E INTERACT   LMB ATTACK   RMB BLOCK   ESC MENU";
         }
@@ -3353,21 +3538,31 @@ void Game::appendViewmodelDraws(RenderFrame& frame) const {
         // accumulated view-punch (recoilPitch_) adds visible climb on fast
         // fire. Reloading dips and tilts the gun while the magazine is swapped.
         float snap = kick * kick;
+        float ads = adsBlend_ * adsBlend_;
         float rprog = reloadTimer_ > 0.0f ? 1.0f - reloadTimer_ / reloadDuration_ : 0.0f;
         float reloadDip = reloadTimer_ > 0.0f ? std::sin(rprog * 3.14159265f) : 0.0f;
-        glm::vec3 gunPos = glm::vec3(0.15f, -0.145f, -0.38f)
-                           + glm::vec3(0.0f, snap * 0.014f, kick * 0.055f)
+        glm::vec3 hipPos(0.15f, -0.145f, -0.38f);
+        glm::vec3 adsPos(0.015f, -0.104f, -0.455f);
+        glm::vec3 gunPos = glm::mix(hipPos, adsPos, ads)
+                           + glm::vec3(0.0f, snap * glm::mix(0.014f, 0.006f, ads),
+                                       kick * glm::mix(0.055f, 0.030f, ads))
                            + glm::vec3(-0.02f * reloadDip, -0.17f * reloadDip,
                                        0.05f * reloadDip);
         glm::mat4 gun = vmCompose(root, gunPos,
-                                  {snap * 17.0f + recoilPitch_ * 1.0f - 2.0f,
-                                   -4.0f - reloadDip * 8.0f,
-                                   -2.0f - snap * 4.0f - reloadDip * 26.0f});
+                                  {snap * glm::mix(17.0f, 9.0f, ads) +
+                                       recoilPitch_ * glm::mix(1.0f, 0.55f, ads) - 2.0f,
+                                   glm::mix(-4.0f, 0.0f, ads) - reloadDip * 8.0f,
+                                   glm::mix(-2.0f, 0.0f, ads) -
+                                       snap * glm::mix(4.0f, 1.5f, ads) - reloadDip * 26.0f});
         // Slide, top rib, sights, frame.
         box(gun, {0.0f, 0.043f, -0.055f}, {0, 0, 0}, {0.05f, 0.052f, 0.245f}, metalDark);
         box(gun, {0.0f, 0.072f, -0.055f}, {0, 0, 0}, {0.036f, 0.012f, 0.245f}, metalMid);
         box(gun, {0.0f, 0.086f, 0.058f}, {0, 0, 0}, {0.034f, 0.016f, 0.014f}, metalMid);
         box(gun, {0.0f, 0.088f, -0.168f}, {0, 0, 0}, {0.010f, 0.018f, 0.012f}, metalMid);
+        if (adsBlend_ > 0.25f) {
+            box(gun, {0.0f, 0.103f, -0.171f}, {0, 0, 0}, {0.016f, 0.010f, 0.010f},
+                {0.30f, 1.0f, 0.92f}, 0.6f * adsBlend_);
+        }
         box(gun, {0.0f, -0.002f, -0.075f}, {0, 0, 0}, {0.046f, 0.038f, 0.19f}, metalMid);
         // Raked-back grip, mag base, trigger guard.
         box(gun, {0.0f, -0.075f, 0.05f}, {-16.0f, 0, 0}, {0.046f, 0.155f, 0.062f}, metalDark);
@@ -3531,6 +3726,36 @@ void Game::appendMinicsEnemyDraws(RenderFrame& frame) const {
     const glm::vec3 skin{0.86f, 0.68f, 0.54f};
     const glm::vec3 gunCol{0.11f, 0.11f, 0.13f};
 
+    for (const MinicsDeathFx& fx : minicsDeaths_) {
+        float k = fx.total > 0.0f ? glm::clamp(1.0f - fx.life / fx.total, 0.0f, 1.0f) : 1.0f;
+        float fall = k * k * (3.0f - 2.0f * k);
+        glm::vec3 base = fx.pos + fx.knockDir * (0.14f + 0.35f * fall) +
+                         glm::vec3(0.0f, 0.28f + (1.0f - fall) * 0.28f, 0.0f);
+        glm::vec3 hot = fx.headshot ? glm::vec3(1.0f, 0.82f, 0.24f)
+                                    : glm::vec3(1.0f, 0.32f, 0.22f);
+        glm::vec3 tint = glm::mix(glm::vec3(1.0f), hot, 0.30f * (1.0f - k));
+        auto C = [&](glm::vec3 c) { return c * tint; };
+        glm::mat4 group = vmCompose(glm::translate(glm::mat4(1.0f), base),
+                                    glm::vec3(0.0f),
+                                    {-78.0f * fall, glm::degrees(fx.yaw),
+                                     (fx.headshot ? 14.0f : -10.0f) * fall});
+
+        obox(group, {-0.16f, 0.36f, 0.0f}, {-18.0f * fall, 0, 0},
+             {0.20f, 0.72f, 0.24f}, C(gear));
+        obox(group, {0.16f, 0.36f, 0.0f}, {18.0f * fall, 0, 0},
+             {0.20f, 0.72f, 0.24f}, C(gear));
+        obox(group, {0.0f, 0.96f, 0.0f}, {0, 0, 0}, {0.54f, 0.72f, 0.36f}, C(vest));
+        obox(group, {0.0f, 1.30f, 0.0f}, {0, 0, 0}, {0.60f, 0.16f, 0.40f}, C(vestDark));
+        obox(group, {0.0f, 1.60f, -0.02f}, {0, 0, 0}, {0.28f, 0.30f, 0.28f}, C(skin),
+             fx.headshot ? 0.15f : 0.0f);
+        obox(group, {0.0f, 1.75f, -0.02f}, {0, 0, 0}, {0.31f, 0.11f, 0.31f}, C(gear));
+        obox(group, {0.32f, 1.03f, -0.12f}, {68.0f, 0, 0}, {0.12f, 0.40f, 0.14f},
+             C(vestDark));
+        obox(group, {-0.32f, 1.03f, 0.10f}, {-30.0f, 0, 0}, {0.12f, 0.40f, 0.14f},
+             C(vestDark));
+        obox(group, {0.22f, 0.88f, -0.44f}, {0, 0, 0}, {0.07f, 0.10f, 0.26f}, gunCol);
+    }
+
     for (const auto& kv : minicsBrains_) {
         const WorldEntity* e = world_.entityById(kv.first);
         if (!e || !e->active) continue;
@@ -3610,6 +3835,11 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
         text(cx, vh * 0.45f, 2.4f, white, buf, true);
         std::snprintf(buf, sizeof(buf), "SCORE   %d", minicsScore_);
         text(cx, vh * 0.45f + 36.0f, 2.6f, glm::vec4(1.0f, 0.9f, 0.4f, 1.0f), buf, true);
+        if (minicsHeadshots_ > 0) {
+            std::snprintf(buf, sizeof(buf), "HEADSHOTS   %d", minicsHeadshots_);
+            text(cx, vh * 0.45f + 68.0f, 2.0f, glm::vec4(0.95f, 0.82f, 0.35f, 1.0f),
+                 buf, true);
+        }
         if (minicsPhaseTimer_ > 0.6f) {
             float a = 0.6f + 0.4f * std::sin(float(menuTime_) * 5.0f);
             text(cx, vh * 0.64f, 2.6f, glm::vec4(1, 1, 1, a),
@@ -3675,6 +3905,10 @@ void Game::appendMinicsHud(RenderFrame& frame) const {
                 frame.rects.push_back({cx + sx * r - 3.0f, cy + sy * r - 3.0f, 6.0f, 6.0f, col});
             }
         }
+    }
+    if (headshotMarkerTimer_ > 0.0f) {
+        float k = glm::clamp(headshotMarkerTimer_ / 0.45f, 0.0f, 1.0f);
+        text(cx, cy - 78.0f, 2.4f, glm::vec4(1.0f, 0.82f, 0.24f, k), "HEADSHOT", true);
     }
 
     // --- Directional damage indicator: a red arc toward the last shooter.

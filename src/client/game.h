@@ -184,7 +184,8 @@ private:
     void minicsEnemyFire(WorldEntity& e); // one enemy shot at the player
     void minicsWin();
     void minicsLose(const char* reason);
-    void onMinicsEnemyKilled(const glm::vec3& at); // score + kill feedback
+    void onMinicsEnemyKilled(const glm::vec3& at, bool headshot, float yaw,
+                             const glm::vec3& knockDir); // score + kill feedback
     void addScorePopup(std::string text, const glm::vec3& color);
     void appendMinicsEnemyDraws(RenderFrame& frame) const; // animated enemies
     void appendMinicsHud(RenderFrame& frame) const;        // ammo/score/round HUD
@@ -327,9 +328,24 @@ private:
         float strafeSign = 1.0f;   // +1 / -1 current strafe side
         float yaw = 0.0f;          // facing, radians (smoothed)
         float muzzle = 0.0f;       // >0 = muzzle-flash / gun-recoil after firing
+        float laneX = 0.0f;        // preferred flank lane around mid cover
+        float laneDrift = 0.0f;    // small per-enemy offset to avoid bunching
+        float repathTimer = 0.0f;  // lane-switch cadence after blocked movement
         unsigned rng = 0x9E3779B9u;
     };
     std::unordered_map<unsigned, MinicsEnemy> minicsBrains_;
+
+    // Short scripted death silhouettes. MiniCS enemies are erased from the
+    // shared world on death, then this client-only visual sells the fall.
+    struct MinicsDeathFx {
+        glm::vec3 pos{0.0f};
+        glm::vec3 knockDir{0.0f, 0.0f, 1.0f};
+        float yaw = 0.0f;
+        float life = 0.0f;
+        float total = 0.95f;
+        bool headshot = false;
+    };
+    std::vector<MinicsDeathFx> minicsDeaths_;
 
     bool minicsActive_ = false;
     MiniCSPhase minicsPhase_ = MiniCSPhase::Countdown;
@@ -337,10 +353,12 @@ private:
     float minicsBannerTimer_ = 0.0f;  // pulse for the "FIGHT" / result banner
     int minicsScore_ = 0;
     int minicsKills_ = 0;
+    int minicsHeadshots_ = 0;
     int minicsEnemiesTotal_ = 0;
     int minicsEnemiesAlive_ = 0;
     std::string minicsResultNote_;    // end-screen subtitle (loss reason)
     float killMarkerTimer_ = 0.0f;    // bigger crosshair X + kill confirm
+    float headshotMarkerTimer_ = 0.0f; // gold center flash + HEADSHOT text
     float hurtTimer_ = 0.0f;          // directional damage indicator life
     float hurtAngle_ = 0.0f;          // screen angle to the last damage source
 
@@ -362,7 +380,8 @@ private:
     float reloadTimer_ = 0.0f;    // >0 = mid-reload (mag refills on completion)
     float recoilPitch_ = 0.0f;    // degrees of view-punch up, recovers to 0
     float recoilYaw_ = 0.0f;      // small horizontal kick, recovers to 0
-    float reloadDuration_ = 1.45f;
+    float reloadDuration_ = 1.25f;
+    float adsBlend_ = 0.0f;       // RMB aim-down-sights ease, MiniCS Glock only
 
     // Feel-polish state: look sway, landing dip, first-spawn control hint.
     float swayX_ = 0.0f;            // smoothed horizontal look velocity

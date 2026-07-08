@@ -214,6 +214,8 @@ WorldTemplate minicsArena() {
     t.placements.push_back({"neon_pillar", {-6.5f, 0.0f, 0.0f}, 0.0f});
     t.placements.push_back({"neon_pillar", {6.5f, 0.0f, 0.0f}, 0.0f});
     t.placements.push_back({"neon_pillar", {0.0f, 0.0f, -18.5f}, 0.0f});
+    t.placements.push_back({"neon_pillar", {-13.8f, 0.0f, 9.5f}, 0.0f});
+    t.placements.push_back({"neon_pillar", {13.8f, 0.0f, 9.5f}, 0.0f});
 
     // Loadout support: a spare pistol at spawn; the ranged opposition holds the
     // north. The MiniCS round loop (client) replaces these with minics_bot
