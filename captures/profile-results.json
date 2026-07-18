@@ -1,0 +1,122 @@
+[
+  {
+    "name": "baseline",
+    "errors": [],
+    "fps": 42.83674440762758,
+    "avgMs": 23.147222222222222,
+    "p95Ms": 33.40000000000009,
+    "metrics": {
+      "calls": 64,
+      "triangles": 34500,
+      "particles": 0
+    },
+    "objects": {
+      "mesh": 179,
+      "lights": 3,
+      "shadow": 0,
+      "transparent": 4,
+      "materials": 26,
+      "geometries": 174
+    }
+  },
+  {
+    "name": "shadows-off",
+    "errors": [],
+    "fps": 41.79270816709265,
+    "avgMs": 23.649523809523814,
+    "p95Ms": 33.40000000000009,
+    "metrics": {
+      "calls": 64,
+      "triangles": 34500,
+      "particles": 0
+    },
+    "objects": {
+      "mesh": 179,
+      "lights": 3,
+      "shadow": 0,
+      "transparent": 4,
+      "materials": 26,
+      "geometries": 174
+    }
+  },
+  {
+    "name": "half-resolution",
+    "errors": [],
+    "fps": 42.20249233646903,
+    "avgMs": 23.26981132075472,
+    "p95Ms": 33.400000000000546,
+    "metrics": {
+      "calls": 64,
+      "triangles": 34500,
+      "particles": 0
+    },
+    "objects": {
+      "mesh": 179,
+      "lights": 3,
+      "shadow": 0,
+      "transparent": 4,
+      "materials": 26,
+      "geometries": 174
+    }
+  },
+  {
+    "name": "world-hidden",
+    "errors": [],
+    "fps": 59.33418286022035,
+    "avgMs": 16.666442953020134,
+    "p95Ms": 16.799999999999727,
+    "metrics": {
+      "calls": 46,
+      "triangles": 2819,
+      "particles": 0
+    },
+    "objects": {
+      "mesh": 179,
+      "lights": 3,
+      "shadow": 0,
+      "transparent": 4,
+      "materials": 26,
+      "geometries": 174
+    }
+  },
+  {
+    "name": "actors-hidden",
+    "errors": [],
+    "fps": 42.15717467367858,
+    "avgMs": 23.270754716981134,
+    "p95Ms": 33.40000000000009,
+    "metrics": {
+      "calls": 64,
+      "triangles": 34500,
+      "particles": 0
+    },
+    "objects": {
+      "mesh": 179,
+      "lights": 3,
+      "shadow": 0,
+      "transparent": 4,
+      "materials": 26,
+      "geometries": 174
+    }
+  },
+  {
+    "name": "world-and-actors-hidden",
+    "errors": [],
+    "fps": 59.62081163798244,
+    "avgMs": 16.665999999999997,
+    "p95Ms": 16.799999999999727,
+    "metrics": {
+      "calls": 46,
+      "triangles": 2819,
+      "particles": 0
+    },
+    "objects": {
+      "mesh": 179,
+      "lights": 3,
+      "shadow": 0,
+      "transparent": 4,
+      "materials": 26,
+      "geometries": 174
+    }
+  }
+]

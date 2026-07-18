@@ -1,0 +1,26 @@
+{
+  "errors": [],
+  "fps": 15.9894139051714,
+  "metrics": {
+    "calls": 85,
+    "triangles": 64848
+  },
+  "tests": {
+    "thirdPerson": true,
+    "firstPerson": true,
+    "cameraCollisionFinite": true,
+    "lockOnCombat": true,
+    "bossCombat": true,
+    "xpCollected": true,
+    "lootCollected": true,
+    "menus": [
+      "inventory",
+      "crafting",
+      "mastery",
+      "factions",
+      "guild"
+    ],
+    "respawnSystemPreserved": true
+  },
+  "video": "19e961aa9f355160c303e542016ff7c3.webm"
+}

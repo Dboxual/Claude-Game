@@ -1,0 +1,36 @@
+{
+  "combat": {
+    "averageFps": 41.38002379351368,
+    "lowestObservedFps": 20,
+    "p95FrameMs": 33.400000000000546,
+    "maxParticles": 43,
+    "peakCalls": 132,
+    "peakTriangles": 37752,
+    "hits": 12
+  },
+  "scene": {
+    "meshObjects": 177,
+    "lights": 3,
+    "dynamicLights": 2,
+    "shadowCasters": 0,
+    "transparentObjects": 4,
+    "instancedMeshes": 6,
+    "uniqueMaterials": 27,
+    "uniqueGeometries": 172,
+    "renderer": "WebKit WebGL",
+    "pixelRatio": 0.5,
+    "bloomEnabled": false
+  },
+  "tests": {
+    "thirdPerson": true,
+    "firstPersonWeapon": true,
+    "lockOn": true,
+    "xpCollected": true,
+    "lootSystemPreserved": true,
+    "menus": true,
+    "cameraCollision": true,
+    "bloomEnabled": false
+  },
+  "consoleErrors": [],
+  "pageErrors": []
+}

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#100d19" />
+  <title>ZION — Ashes of the First Gods</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+    {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"}}
+  </script>
+</head>
+<body>
+  <div id="boot" class="boot" aria-label="Zion boot sequence">
+    <div class="boot-orb"><span></span><span></span><span></span></div>
+    <div class="boot-title">ZION</div>
+    <div class="boot-sub">ASHES OF THE FIRST GODS</div>
+    <button id="enterBtn" class="enter-btn">ENTER THE AGE</button>
+    <small>Click anywhere to awaken</small>
+  </div>
+
+  <main id="game" class="game hidden">
+    <canvas id="world"></canvas>
+    <div class="scanlines"></div>
+
+    <header class="topbar glass">
+      <div class="brand"><i class="sigil">Z</i><div><strong>ZION</strong><small>THE RUINS OF GLOAMWOOD</small></div></div>
+      <div class="top-resources">
+        <span title="Silver drachma"><b>◈</b> <i id="silver">180</i></span>
+        <span title="Divine favor"><b>✦</b> <i id="favor">0</i></span>
+      </div>
+      <button class="icon-btn" data-panel="codex" title="Codex">?</button>
+    </header>
+
+    <aside class="player-card glass">
+      <div class="portrait"><span>𐀀</span><i id="levelBadge">1</i></div>
+      <div class="vitals">
+        <div class="player-name">THE NAMELESS <span>Wayfarer</span></div>
+        <div class="bar hp"><i id="hpBar"></i><b id="hpText">120 / 120</b></div>
+        <div class="bar energy"><i id="energyBar"></i><b id="energyText">100 / 100</b></div>
+        <div class="xp-line"><i id="xpBar"></i></div>
+      </div>
+    </aside>
+
+    <section id="questCard" class="quest-card glass">
+      <small>FIRST THREAD</small>
+      <strong id="questTitle">Tools for the Living</strong>
+      <p id="questText">Gather 3 olivewood and 2 bronze ore.</p>
+      <div id="questProgress" class="quest-progress"></div>
+    </section>
+
+    <section class="minimap glass">
+      <canvas id="map" width="150" height="150"></canvas>
+      <span>GLOAMWOOD RUINS</span>
+    </section>
+
+    <div id="prompt" class="world-prompt hidden"><kbd>E</kbd><span>Gather</span></div>
+    <div id="reticle" class="reticle"><i></i><i></i><i></i><i></i></div>
+    <div id="areaTitle" class="area-title"><small>THE WESTERN WILDS</small><strong>The Ruins of Gloamwood</strong><span>Where the old gods still whisper</span></div>
+    <div id="targetCard" class="target-card glass hidden"><small>OATHBREAKER</small><strong id="targetName">ASH WARDEN</strong><div><i id="targetHp"></i></div></div>
+    <div id="toastStack" class="toast-stack"></div>
+    <div id="lootFeed" class="loot-feed"></div>
+
+    <nav class="actionbar glass" aria-label="Abilities">
+      <button class="skill" data-key="1" data-ability="cleave"><kbd>1</kbd><span class="ability-icon cleave">ϟ</span><small>Riven Arc</small><i class="cooldown"></i></button>
+      <button class="skill" data-key="2" data-ability="dash"><kbd>2</kbd><span class="ability-icon dash">➤</span><small>Hero's Rush</small><i class="cooldown"></i></button>
+      <button class="skill locked" data-key="3"><kbd>3</kbd><span class="ability-icon">?</span><small>Mastery II</small></button>
+      <button class="skill" data-key="4" data-ability="mend"><kbd>4</kbd><span class="ability-icon mend">✚</span><small>Ambrosia</small><i class="cooldown"></i></button>
+      <div class="weapon-slot" title="Equipped weapon"><span id="weaponIcon">†</span><small id="weaponName">Worn Xiphos</small></div>
+    </nav>
+
+    <nav class="dock glass" aria-label="Game menus">
+      <button data-panel="inventory"><span>▦</span><small>Inventory</small><kbd>I</kbd></button>
+      <button data-panel="forge"><span>⚒</span><small>Craft</small><kbd>C</kbd></button>
+      <button data-panel="mastery"><span>✣</span><small>Path</small><kbd>P</kbd></button>
+      <button data-panel="factions"><span>⚑</span><small>Factions</small><kbd>F</kbd></button>
+      <button data-panel="guild"><span>♜</span><small>Guild</small><kbd>G</kbd></button>
+    </nav>
+
+    <section id="panel" class="panel glass hidden" aria-live="polite">
+      <button id="closePanel" class="panel-close">×</button>
+      <div id="panelContent"></div>
+    </section>
+
+    <section id="deathScreen" class="death-screen hidden">
+      <span>THE THREAD IS SEVERED</span><p>The Fates are not finished with you.</p><button id="respawnBtn">RETURN TO THE SHRINE</button>
+    </section>
+
+    <div class="controls-hint">WASD move · mouse camera · click attack · Q lock-on · V first-person · wheel zoom · E interact</div>
+  </main>
+  <script type="module" src="game3d.js"></script>
+</body>
+</html>

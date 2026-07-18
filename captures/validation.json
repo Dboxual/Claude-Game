@@ -1,0 +1,9 @@
+{
+  "errors": [],
+  "fps": 14.141194386758546,
+  "metrics": {
+    "calls": 281,
+    "triangles": 73358
+  },
+  "webgl": true
+}
