@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#100d19" />
   <title>ZION — Ashes of the First Gods</title>
   <link rel="stylesheet" href="styles.css" />
@@ -86,6 +86,12 @@
       <span>THE THREAD IS SEVERED</span><p>The Fates are not finished with you.</p><button id="respawnBtn">RETURN TO THE SHRINE</button>
     </section>
 
+    <div id="fpsHud" class="fps-hud"></div>
+    <nav class="touch-cluster" aria-label="Touch actions">
+      <button data-vkey="e" title="Gather / interact">✋<small>Gather</small></button>
+      <button data-vkey="q" title="Lock-on">◎<small>Lock</small></button>
+      <button data-vkey="v" title="Camera view">👁<small>View</small></button>
+    </nav>
     <div class="controls-hint">WASD move · mouse camera · click attack · Q lock-on · V first-person · wheel zoom · E interact</div>
   </main>
   <script type="module" src="game3d.js"></script>

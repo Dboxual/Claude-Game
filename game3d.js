@@ -9,8 +9,43 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const canvas=$('#world'), clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const scene=new THREE.Scene(); scene.background=new THREE.Color(0x17242b);scene.fog=new THREE.FogExp2(0x29404a,.018);
 const camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,.1,500);camera.position.set(0,4,8);
-const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio*.5,.85));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=false;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.5;
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=false;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.5;
 const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),1.35,.65,.25);composer.addPass(bloom);
+/* ── Adaptive quality: hold a playable frame rate on ANY device ──
+   Rolling FPS drives render scale between floor and ceiling; if the floor
+   still can't hold ~30, post-processing (bloom composer) is dropped and the
+   scene renders direct. Recovers upward with hysteresis when headroom returns. */
+const IS_TOUCH=matchMedia('(pointer:coarse)').matches;
+const quality={
+  ceil:Math.min(devicePixelRatio*(IS_TOUCH?.5:.6),IS_TOUCH?1.0:.85),
+  floor:.3, scale:0, fx:!IS_TOUCH,           // phones start without bloom
+  frames:0, acc:0, lastAdjust:0, fps:60,
+};
+quality.scale=IS_TOUCH?Math.min(.6,quality.ceil):quality.ceil;
+function applyQuality(){
+  renderer.setPixelRatio(quality.scale);
+  composer.setPixelRatio(quality.scale);
+  composer.setSize(innerWidth,innerHeight);
+}
+applyQuality();
+function adaptQuality(dt,t){
+  quality.frames++;quality.acc+=dt;
+  if(quality.acc<2)return;                    // evaluate every ~2s
+  quality.fps=quality.frames/quality.acc;
+  quality.frames=0;quality.acc=0;
+  if(t-quality.lastAdjust<2500)return;
+  if(quality.fps<28){
+    if(quality.scale>quality.floor){quality.scale=Math.max(quality.floor,quality.scale*.85);applyQuality();}
+    else if(quality.fx){quality.fx=false;toast('PERFORMANCE MODE');}
+    quality.lastAdjust=t;
+  }else if(quality.fps>55){
+    if(!quality.fx&&quality.scale>=quality.floor*1.4){quality.fx=true;}
+    else if(quality.scale<quality.ceil){quality.scale=Math.min(quality.ceil,quality.scale*1.1);applyQuality();}
+    quality.lastAdjust=t;
+  }
+  const hud=document.getElementById('fpsHud');
+  if(hud)hud.textContent=`${Math.round(quality.fps)} fps · ${Math.round(quality.scale*100)}%${quality.fx?'':' · perf'}`;
+}
 const hemi=new THREE.HemisphereLight(0x89a9bd,0x241716,1.25);scene.add(hemi);const moon=new THREE.DirectionalLight(0xffc77d,5.2);moon.position.set(-16,24,8);moon.castShadow=false;scene.add(moon);
 const mats={ground:new THREE.MeshStandardMaterial({color:0x45404a,roughness:.95}),stone:new THREE.MeshStandardMaterial({color:0x62566b,roughness:.82}),bronze:new THREE.MeshStandardMaterial({color:0x856342,metalness:.72,roughness:.42}),wood:new THREE.MeshStandardMaterial({color:0x4e342b,roughness:1}),leaf:new THREE.MeshStandardMaterial({color:0x385848,roughness:1}),enemy:new THREE.MeshStandardMaterial({color:0x67334c,roughness:.65}),skin:new THREE.MeshStandardMaterial({color:0xd2a082,roughness:.8}),cloth:new THREE.MeshStandardMaterial({color:0x642c4d,roughness:.8}),black:new THREE.MeshStandardMaterial({color:0x111019,metalness:.75,roughness:.25}),violet:new THREE.MeshStandardMaterial({color:0x421369,emissive:0x9d20ff,emissiveIntensity:6,metalness:.55,roughness:.22}),fire:new THREE.MeshStandardMaterial({color:0xff7a25,emissive:0xff2600,emissiveIntensity:8}),teal:new THREE.MeshStandardMaterial({color:0x108d91,emissive:0x00f1df,emissiveIntensity:5})};
 const state={level:1,xp:0,xpNext:100,hp:120,maxHp:120,energy:100,maxEnergy:100,silver:180,favor:0,keys:{},quest:0,faction:null,guild:null,mastery:{combat:8,gather:0,craft:0},cool:{cleave:0,dash:0,mend:0},inv:{wood:0,ore:0,hide:0,herb:1,bronze:0,plank:0,sword:1,buckler:0,potion:2},nodes:[],enemies:[],particles:[],orbs:[],drops:[],target:null,locked:null,attacking:0,dead:false};
@@ -64,8 +99,59 @@ function spawnXp(pos,total){const count=Math.ceil(total/7);for(let i=0;i<count;i
 function spawnDrop(pos,rare=false){if(!rare&&Math.random()>.35)return;const g=new THREE.Group(),color=rare?0xe28a3c:0x5b8fc2,beam=mesh(new THREE.CylinderGeometry(.025,.12,2.2,8),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.38,depthWrite:false}),false),item=mesh(new THREE.DodecahedronGeometry(.22,0),rare?art.fire:art.magic,false);beam.position.y=1.1;item.position.y=.28;g.add(beam,item);g.position.copy(pos);g.userData={rare,life:16};scene.add(g);state.drops.push(g);loot(rare?'LEGENDARY RELIC REVEALED':'RARE SPOILS REVEALED')}
 let started=false,panel=null,last=0;function enter(){if(started)return;started=true;startAmbience();$('#boot').style.opacity=0;setTimeout(()=>$('#boot').remove(),1000);$('#game').classList.remove('hidden');toast('THE RUINS OF GLOAMWOOD');setTimeout(()=>$('.controls-hint')?.classList.add('learned'),11000);requestAnimationFrame(loop)}$('#enterBtn').onclick=enter;$('#boot').onclick=enter;
 addEventListener('keydown',e=>{state.keys[e.key.toLowerCase()]=true;const m={i:'inventory',c:'forge',p:'mastery',f:'factions',g:'guild'}[e.key.toLowerCase()];if(m)togglePanel(m);if(e.key==='Escape')closePanel();if(e.key.toLowerCase()==='e')interact();if(e.key.toLowerCase()==='v'){cameraRig.first=!cameraRig.first;toast(cameraRig.first?'FIRST-PERSON VIEW':'THIRD-PERSON VIEW')}if(e.key.toLowerCase()==='q')toggleLock();if('124'.includes(e.key))useAbility({'1':'cleave','2':'dash','4':'mend'}[e.key])});addEventListener('keyup',e=>state.keys[e.key.toLowerCase()]=false);
-const ray=new THREE.Raycaster(),pointer=new THREE.Vector2();canvas.addEventListener('pointerdown',e=>{pointer.set(e.clientX/innerWidth*2-1,-e.clientY/innerHeight*2+1);ray.setFromCamera(pointer,camera);const hits=ray.intersectObjects(state.enemies.filter(x=>!x.userData.dead),true);if(hits.length){let o=hits[0].object;while(o.parent&&!state.enemies.includes(o))o=o.parent;attack(o);return}const plane=new THREE.Plane(new THREE.Vector3(0,1,0),0);const at=new THREE.Vector3();ray.ray.intersectPlane(plane,at);state.target=at});
-canvas.addEventListener('contextmenu',e=>e.preventDefault());canvas.addEventListener('pointerdown',e=>{if(e.button===2)cameraRig.drag=true});addEventListener('pointerup',()=>cameraRig.drag=false);addEventListener('pointermove',e=>{if(cameraRig.drag){cameraRig.yaw-=e.movementX*.006;cameraRig.pitch=clamp(cameraRig.pitch-e.movementY*.004,-.3,.75)}});canvas.addEventListener('wheel',e=>{cameraRig.distance=clamp(cameraRig.distance+Math.sign(e.deltaY)*.8,3.5,12)},{passive:true});
+const ray=new THREE.Raycaster(),pointer=new THREE.Vector2();
+function tapAction(cx,cy){pointer.set(cx/innerWidth*2-1,-cy/innerHeight*2+1);ray.setFromCamera(pointer,camera);const hits=ray.intersectObjects(state.enemies.filter(x=>!x.userData.dead),true);if(hits.length){let o=hits[0].object;while(o.parent&&!state.enemies.includes(o))o=o.parent;attack(o);return}const plane=new THREE.Plane(new THREE.Vector3(0,1,0),0);const at=new THREE.Vector3();ray.ray.intersectPlane(plane,at);state.target=at}
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+/* Unified pointer input.
+   Desktop: left-click = act, right-drag = orbit, wheel = zoom (unchanged).
+   Touch: tap = act, one-finger drag = orbit, two-finger pinch = zoom. */
+const touches=new Map();let touchStart=null,touchDragging=false,pinchDist=0;
+canvas.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch'){
+    touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(touches.size===1){touchStart={x:e.clientX,y:e.clientY,t:performance.now()};touchDragging=false;}
+    else if(touches.size===2){const p=[...touches.values()];pinchDist=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);touchStart=null;}
+    return;
+  }
+  if(e.button===2){cameraRig.drag=true;return}
+  if(e.button===0)tapAction(e.clientX,e.clientY);
+});
+addEventListener('pointermove',e=>{
+  if(e.pointerType==='touch'){
+    const rec=touches.get(e.pointerId);if(!rec)return;
+    const px=rec.x,py=rec.y;rec.x=e.clientX;rec.y=e.clientY;
+    if(touches.size===1&&touchStart){
+      if(!touchDragging&&Math.hypot(e.clientX-touchStart.x,e.clientY-touchStart.y)>12)touchDragging=true;
+      if(touchDragging){cameraRig.yaw-=(e.clientX-px)*.008;cameraRig.pitch=clamp(cameraRig.pitch-(e.clientY-py)*.005,-.3,.75)}
+    }else if(touches.size===2){
+      const p=[...touches.values()];const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+      if(pinchDist)cameraRig.distance=clamp(cameraRig.distance+(pinchDist-d)*.03,3.5,12);
+      pinchDist=d;
+    }
+    return;
+  }
+  if(cameraRig.drag){cameraRig.yaw-=e.movementX*.006;cameraRig.pitch=clamp(cameraRig.pitch-e.movementY*.004,-.3,.75)}
+});
+addEventListener('pointerup',e=>{
+  if(e.pointerType==='touch'){
+    touches.delete(e.pointerId);
+    if(touchStart&&!touchDragging&&performance.now()-touchStart.t<400)tapAction(e.clientX,e.clientY);
+    touchStart=null;if(touches.size<2)pinchDist=0;
+    return;
+  }
+  cameraRig.drag=false;
+});
+addEventListener('pointercancel',e=>{touches.delete(e.pointerId);touchStart=null;if(touches.size<2)pinchDist=0;});
+canvas.addEventListener('wheel',e=>{cameraRig.distance=clamp(cameraRig.distance+Math.sign(e.deltaY)*.8,3.5,12)},{passive:true});
+/* Touch HUD + ability-bar buttons reuse the existing keyboard handlers via
+   synthetic events, so no game logic changes. */
+document.querySelectorAll('[data-vkey],.skill[data-key]').forEach(b=>{
+  b.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();
+    const k=b.dataset.vkey||b.dataset.key;
+    dispatchEvent(new KeyboardEvent('keydown',{key:k}));
+    setTimeout(()=>dispatchEvent(new KeyboardEvent('keyup',{key:k})),80);
+  });
+});
 function toggleLock(){if(state.locked){state.locked=null;$('#targetCard').classList.add('hidden');return}state.locked=near(state.enemies.filter(e=>!e.userData.dead),15);if(state.locked){$('#targetCard').classList.remove('hidden');$('#targetName').textContent=state.locked.userData.boss?'THE HOLLOW COLOSSUS':state.locked.userData.kind==='guardian'?'HOLLOW GUARDIAN':'GLOAMWOOD RAIDER';tone(180,.08,'square')}}
 function distance(a,b){return Math.hypot(a.position.x-b.position.x,a.position.z-b.position.z)}function near(list,max){let best=null,d=max;for(const o of list){const q=distance(player,o);if(q<d){best=o;d=q}}return best}let lastFoot=0,frameCounter=0,lastMapDraw=0,lastCollision=0,hitStop=0;const tempA=new THREE.Vector3(),tempB=new THREE.Vector3(),tempC=new THREE.Vector3(),cameraCollisionRay=new THREE.Raycaster(),lastSafeCamera=new THREE.Vector3();
 function update(dt,t){frameCounter++;let sx=(state.keys.d?1:0)-(state.keys.a?1:0),sz=(state.keys.w?1:0)-(state.keys.s?1:0),dx=0,dz=0;if(sx||sz){const l=Math.hypot(sx,sz);sx/=l;sz/=l;dx=Math.sin(cameraRig.yaw)*sz+Math.cos(cameraRig.yaw)*sx;dz=Math.cos(cameraRig.yaw)*sz-Math.sin(cameraRig.yaw)*sx;state.target=null}else if(state.target){tempA.copy(state.target).sub(player.position).setY(0);if(tempA.lengthSq()>.0625){tempA.normalize();dx=tempA.x;dz=tempA.z}else state.target=null}const moveSpeed=state.keys.shift?8.2:5.6;if(dx||dz){player.position.x=clamp(player.position.x+dx*moveSpeed*dt,-34,34);player.position.z=clamp(player.position.z+dz*moveSpeed*dt,-34,39);const desired=Math.atan2(dx,dz);player.rotation.y+=Math.atan2(Math.sin(desired-player.rotation.y),Math.cos(desired-player.rotation.y))*Math.min(1,dt*12);if(t-lastFoot>(state.keys.shift?280:390)){const wet=Math.abs(player.position.z+13)<3.6;noise(.045,wet?.014:.009,wet?520:1050);lastFoot=t}}player.position.y=groundHeight(player.position.x,player.position.z);animateHumanoid(player,t,dt,(dx||dz)?moveSpeed:0,state.attacking);state.energy=clamp(state.energy+8*dt,0,state.maxEnergy);for(const k in state.cool)state.cool[k]=Math.max(0,state.cool[k]-dt);state.attacking=Math.max(0,state.attacking-dt);fpRig.visible=cameraRig.first;fpRig.rotation.z=state.attacking?Math.sin(state.attacking*8)*.42:Math.sin(t*.0017)*.012;fpRig.position.y=Math.sin(t*.002)*.012;
@@ -99,5 +185,5 @@ function guildHTML(){return `<h2>${state.guild||'No Warband'}</h2>${state.guild?
 function renderPanel(n){const c=$('#panelContent');if(n==='inventory')c.innerHTML=shell('Satchel','Everything carried has weight and purpose.',['EQUIPMENT','LOADOUTS','ATTRIBUTES'],inventoryHTML());if(n==='forge')c.innerHTML=shell('The Forge','Shape the world from what you harvest.',['ALL RECIPES','REFINING','WEAPONS','ARMOR'],forgeHTML());if(n==='mastery')c.innerHTML=shell('Thread of Fate','Your actions decide what you become.',['CONSTELLATION','COMBAT','CRAFT','GATHER'],masteryHTML());if(n==='factions')c.innerHTML=shell('Divine Oaths','Serve a pantheon. Change the age.',['PANTHEONS','CAMPAIGN','REWARDS'],factionsHTML());if(n==='guild')c.innerHTML=shell('Warbands','Build a hall and claim relics.',['MY WARBAND','FINDER','TERRITORIES'],guildHTML());if(n==='codex')c.innerHTML=shell('Codex','The first record of Zion.',['VISION','CONTROLS','ROADMAP'],`<h2>3D MYTHIC SANDBOX</h2><p>PS2-era silhouettes meet animated emissive relics, neon runes, fire, bloom, sparks, and magical melee combat. No guns.</p>`);bindPanel()}
 function bindPanel(){$$('[data-craft]').forEach(b=>b.onclick=()=>craft(b.dataset.craft));$$('[data-faction]').forEach(b=>b.onclick=()=>{state.faction=b.dataset.faction;state.favor+=2;toast('OATH SWORN · '+state.faction.toUpperCase());renderPanel('factions')});const fg=$('#foundGuild');if(fg)fg.onclick=()=>{const n=$('#guildName').value.trim();if(n&&state.silver>=100){state.silver-=100;state.guild=n;toast('WARBAND FOUNDED');renderPanel('guild')}}}
 function craft(id){const r=recipes.find(x=>x.id===id);if(!r||Object.entries(r.cost).some(([k,v])=>state.inv[k]<v))return;for(const [k,v] of Object.entries(r.cost))state.inv[k]-=v;state.inv[id]=(state.inv[id]||0)+r.out;state.mastery.craft+=12;gainXp(18);toast(r.name.toUpperCase()+' FORGED');checkQuest();renderPanel('forge')}
-window.__zion={state,scene,worldFx,player,camera,cameraRig,renderer,composer,moon,groundHeight,teleport(x,z){player.position.set(x,groundHeight(x,z),z)},spawnXp,spawnDrop,attack,hit};function loop(t){const dt=Math.min(.033,(t-last)/1000||0);last=t;if(hitStop>0)hitStop-=dt;else if(!state.dead)update(dt,t);composer.render();window.__zion.metrics={calls:renderer.info.render.calls,triangles:renderer.info.render.triangles,particles:state.particles.length};requestAnimationFrame(loop)}
-addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight)});
+window.__zion={state,scene,worldFx,player,camera,cameraRig,renderer,composer,moon,groundHeight,teleport(x,z){player.position.set(x,groundHeight(x,z),z)},spawnXp,spawnDrop,attack,hit};function loop(t){const dt=Math.min(.033,(t-last)/1000||0);last=t;if(hitStop>0)hitStop-=dt;else if(!state.dead)update(dt,t);if(quality.fx)composer.render();else renderer.render(scene,camera);adaptQuality(dt,t);window.__zion.metrics={calls:renderer.info.render.calls,triangles:renderer.info.render.triangles,particles:state.particles.length,fps:quality.fps,scale:quality.scale};requestAnimationFrame(loop)}
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);applyQuality()});

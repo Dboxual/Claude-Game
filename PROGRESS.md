@@ -101,3 +101,26 @@ The repeated-hit Chromium combat profile reports:
 The average is above the required 30 FPS completion threshold. The 95th-percentile frame corresponds to approximately 30 FPS; an isolated 20 FPS frame remains during the repeated-hit stress test and is recorded here rather than hidden.
 
 Final correction media: `captures/correction-pass/`
+
+## Adaptive performance & touch pass — 2026-07-19
+
+Goal: playable on ANY device (owner reported poor FPS on their hardware).
+
+- Adaptive quality engine: rolling-FPS-driven render-scale between 0.3 and a
+  device-based ceiling; evaluates every ~2s with hysteresis; if the floor still
+  can't hold ~28 FPS the bloom composer is dropped and the scene renders direct
+  ("PERFORMANCE MODE"); recovers upward when headroom returns.
+- Touch devices start in performance mode at reduced scale by default
+  (pointer:coarse detection).
+- Discrepancy fixed: bloom was documented as disabled in the correction pass but
+  was still active in game3d.js line 13 — now tier-controlled.
+- Full touch controls: tap = move/attack (existing tap-to-move reused),
+  one-finger drag = camera orbit, pinch = zoom, on-screen buttons for
+  Gather/Lock-on/View (synthetic key events — zero game-logic changes),
+  ability bar and dock now tappable, touch-action:none on canvas,
+  no-zoom viewport.
+- FPS/scale HUD bottom-left (fps · render % · perf flag).
+- Validation: node syntax check passed; served OK. Headless Chromium is NOT
+  available on this machine — runtime validation pending on real devices.
+- Repo: local folder now attached to github.com/Dboxual/Claude-Game history
+  (main @ f2e126f); this work is the first commit on top.

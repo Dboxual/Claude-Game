@@ -15,3 +15,16 @@
 .xp-pulse{animation:xpPulse .22s ease-out}@keyframes xpPulse{50%{filter:brightness(1.45);transform:scale(1.025)}}
 .damage-number{position:fixed;z-index:18;pointer-events:none;color:#efe2c4;font:900 18px Cinzel;text-shadow:0 2px 3px #000;transform:translate(-50%,-50%);animation:damageRise .72s ease-out forwards}.damage-number.critical{color:#ffd36c;font-size:27px}@keyframes damageRise{to{opacity:0;transform:translate(-50%,-90px) scale(1.15)}}
 #perfProof{position:fixed;z-index:80;left:50%;top:50%;transform:translate(-50%,-50%);width:430px;padding:22px 26px;background:linear-gradient(145deg,#17151aeF,#0a0b0dF4);border:1px solid #b39258;box-shadow:0 22px 70px #000d;color:#e9dfc9}#perfProof small{display:block;font:700 8px Cinzel;letter-spacing:.28em;color:#b99c67}#perfProof strong{display:block;font:900 25px Cinzel;margin:8px 0 17px;color:#e5c174}#perfProof div{display:grid;grid-template-columns:1fr auto;gap:8px 20px;padding:13px 0;border-block:1px solid #55462f}#perfProof span{font-size:11px;color:#a9a39a}#perfProof b{font:700 11px Cinzel;color:#ece2cf}#perfProof em{display:block;margin-top:13px;font-size:9px;color:#77988a}
+/* ── Touch & adaptive-quality HUD ── */
+#world{touch-action:none}
+.fps-hud{position:fixed;z-index:9;left:12px;bottom:12px;padding:3px 9px;background:rgba(10,8,14,.55);border:1px solid #3a3244;color:#a99cb5;font:600 10px Inter,system-ui;letter-spacing:.08em;border-radius:6px;pointer-events:none}
+.touch-cluster{display:none;position:fixed;z-index:9;right:14px;bottom:150px;flex-direction:column;gap:10px}
+.touch-cluster button{width:58px;height:58px;border-radius:50%;border:1px solid #806293;background:rgba(9,7,13,.62);color:#e9dfc9;font-size:19px;display:grid;place-items:center;line-height:1;-webkit-tap-highlight-color:transparent}
+.touch-cluster button small{font:700 7px Cinzel;letter-spacing:.14em;color:#ae92bd;margin-top:1px}
+.touch-cluster button:active{background:#392545;transform:scale(.94)}
+@media(pointer:coarse){
+  .touch-cluster{display:flex}
+  .controls-hint{display:none}
+  .actionbar .skill{min-width:52px;min-height:52px}
+  .dock button{min-height:46px}
+}
