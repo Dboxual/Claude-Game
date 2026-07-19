@@ -30,7 +30,7 @@ acceptable substitutes for optimization.
 
 ## Phases
 
-1. **Audit and baseline (current):** protect the repository, inventory the
+1. **Audit and baseline (complete):** protect the repository, inventory the
    prototype, reproduce validation, identify placeholders and architecture
    risks, and define trustworthy native-resolution benchmark work.
 2. **Foundation stabilization:** modularize without a rewrite; pin dependencies;
@@ -64,3 +64,18 @@ acceptable substitutes for optimization.
 
 The two unchecked items are baseline follow-ups, not authorization to add
 gameplay in Phase 1. See `PHASE1_AUDIT.md` for findings and evidence.
+
+## Phase 2 status — honest native-resolution rendering
+
+- [x] Default rendering is 100% manual scale with dynamic resolution off.
+- [x] Low, Medium, High, and Custom graphics states are explicit.
+- [x] Reduced manual scale is player-selected, visible, and persisted.
+- [x] Dynamic scaling is optional, bounded, slow-adjusting, and independently
+  reported without changing the saved manual scale.
+- [x] Renderer identity and SwiftShader classification are visible.
+- [x] Four fixed-scene native-resolution configurations were tested.
+- [ ] Repeat the benchmark on representative physical GPUs; this environment
+  could not create a hardware WebGL context.
+
+See `PHASE2_REPORT.md`. Phase 2 does not include the fixed-step or broader
+foundation work listed in later phases.

@@ -129,3 +129,14 @@ Goal: playable on ANY device (owner reported poor FPS on their hardware).
   40 draw calls, 28,719 triangles, zero console/page errors. Compare: the
   correction-pass baseline in this same software environment was 13.5-41 FPS.
   Media: captures/adaptive-pass/ (8 screenshots + gameplay video).
+
+## Phase 2 native-resolution pass — 2026-07-19
+
+- Removed the hardcoded desktop 60% and touch 50–60% render ceilings.
+- Default is now Medium, 100% manual render scale, dynamic resolution off.
+- Added persistent Low/Medium/High/Custom graphics controls and explicit
+  50/67/75/85/100% manual scale choices.
+- Added optional bounded dynamic scaling with target FPS and stable 5% steps.
+- Added WebGL/vendor/renderer diagnostics with explicit SwiftShader detection.
+- Added a fixed-scene four-configuration benchmark and camera/UI regression
+  validation. Full results and limitations: `PHASE2_REPORT.md`.
