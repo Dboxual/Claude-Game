@@ -124,3 +124,8 @@ Goal: playable on ANY device (owner reported poor FPS on their hardware).
   available on this machine — runtime validation pending on real devices.
 - Repo: local folder now attached to github.com/Dboxual/Claude-Game history
   (main @ f2e126f); this work is the first commit on top.
+- Runtime validation COMPLETED same day (Playwright Chromium, SwiftShader,
+  no root needed — nss libs extracted locally): 60.0 FPS at 60% render scale,
+  40 draw calls, 28,719 triangles, zero console/page errors. Compare: the
+  correction-pass baseline in this same software environment was 13.5-41 FPS.
+  Media: captures/adaptive-pass/ (8 screenshots + gameplay video).
