@@ -2,6 +2,10 @@
 
 An original 3D mythological sandbox action-RPG prototype inspired by the depth and player freedom of classless MMOs and the bold visual direction of PS2-era adventures.
 
+Project direction and the phased roadmap are in [GOALS.md](GOALS.md). The
+current technical, visual, architecture, and performance baseline is recorded
+in [PHASE1_AUDIT.md](PHASE1_AUDIT.md).
+
 ## Current vertical slice
 
 The playable browser build now opens in **The Ruins of Gloamwood**, a compact authored action-RPG route containing:
