@@ -1,11 +1,11 @@
 @echo off
 setlocal
 rem ==============================================================
-rem  TacMove - one-click build + run (Windows x64)
+rem  ZION - one-click build + run (Windows x64)
 rem  Needs: git, CMake, Visual Studio 2022 (or Build Tools) with
 rem  the "Desktop development with C++" workload.
 rem  First run clones vcpkg to %USERPROFILE%\vcpkg and compiles
-rem  SDL3 from source - expect a few minutes. Later runs are fast.
+rem  raylib from source - expect a few minutes. Later runs are fast.
 rem ==============================================================
 cd /d "%~dp0"
 
@@ -42,7 +42,7 @@ set "VCPKG_ROOT=%USERPROFILE%\vcpkg"
 :have_vcpkg
 echo [setup] Using vcpkg at "%VCPKG_ROOT%"
 
-echo [build] Configuring (first run also builds SDL3 - takes a few minutes) ...
+echo [build] Configuring (first run also builds raylib - takes a few minutes) ...
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake"
 if errorlevel 1 goto fail
 
@@ -50,8 +50,8 @@ echo [build] Compiling ...
 cmake --build build --config Release --parallel
 if errorlevel 1 goto fail
 
-set "GAME=build\Release\tacmove.exe"
-if not exist "%GAME%" set "GAME=build\tacmove.exe"
+set "GAME=build\Release\zion.exe"
+if not exist "%GAME%" set "GAME=build\zion.exe"
 echo [run] %GAME% %*
 "%GAME%" %*
 exit /b %errorlevel%

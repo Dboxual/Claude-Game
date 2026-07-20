@@ -1,10 +1,7 @@
 build/
 vcpkg_installed/
-config/settings.cfg
-worlds/
+*.png
+!docs/*.png
 .vs/
 .cache/
-CMakeUserPresets.json
-*.user
-codex_*.txt
-codex_*.diff
+compile_commands.json

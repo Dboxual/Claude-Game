@@ -1,9 +1,9 @@
 {
-  "name": "tacmove",
+  "name": "zion",
   "version": "0.1.0",
-  "description": "TacMove - tactical FPS movement prototype (Milestone 1)",
+  "description": "Zion - original MMORPG. Phase 1: engine foundation vertical slice.",
   "dependencies": [
-    "sdl3",
-    "glm"
+    "raylib",
+    "nlohmann-json"
   ]
 }
