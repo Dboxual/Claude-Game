@@ -73,13 +73,30 @@ void Ui::LabelCentered(Vector2 center, const char* text, float size, Color c) {
 }
 
 void Ui::Panel(Rectangle r, const char* title) {
+    // Layered ink-glass with small archive-like corner seals. The broad dark
+    // field keeps world color visible around it while the warm/cool edge pair
+    // gives all menus one recognizable Zion material.
+    Rectangle shadow = { r.x + S(7), r.y + S(9), r.width, r.height };
+    DrawRectangleRounded(shadow, 0.045f, 8, Color{ 3, 7, 13, 150 });
     DrawRectangleRounded(r, 0.045f, 8, theme.panel);
-    DrawRectangleRoundedLinesEx(r, 0.045f, 8, S(1.5f), theme.panelBorder);
+    DrawRectangleRoundedLinesEx(r, 0.045f, 8, S(2.0f), Fade(theme.accent, 0.34f));
+    Rectangle inner = { r.x + S(5), r.y + S(5), r.width - S(10), r.height - S(10) };
+    DrawRectangleRoundedLinesEx(inner, 0.04f, 8, S(1.0f), Fade(theme.panelBorder, 0.55f));
+
+    float d = S(4.0f);
+    Vector2 corners[4] = {
+        { r.x + S(12), r.y + S(12) }, { r.x + r.width - S(12), r.y + S(12) },
+        { r.x + S(12), r.y + r.height - S(12) },
+        { r.x + r.width - S(12), r.y + r.height - S(12) }
+    };
+    for (Vector2 p : corners) DrawPoly(p, 4, d, 45.0f, Fade(theme.accent, 0.58f));
+
     if (title && title[0]) {
         LabelCentered({ r.x + r.width / 2, r.y + S(34) }, title, 30, theme.accent);
-        float lineW = r.width * 0.5f;
+        float lineW = r.width * 0.56f;
         DrawRectangle((int)(r.x + (r.width - lineW) / 2), (int)(r.y + S(58)),
-                      (int)lineW, (int)S(2), Fade(theme.accent, 0.35f));
+                      (int)lineW, (int)S(1), Fade(theme.accent, 0.55f));
+        DrawCircleV({ r.x + r.width / 2, r.y + S(58.5f) }, S(3), theme.accent);
     }
 }
 
@@ -92,6 +109,8 @@ bool Ui::Button(const char* id, Rectangle r, const char* label) {
     bool clicked = hover && mousePressed;
     if (clicked) clickEvents++;
 
+    Rectangle shadow = { r.x + S(3), r.y + S(4), r.width, r.height };
+    DrawRectangleRounded(shadow, 0.22f, 8, Color{ 2, 7, 12, 120 });
     Color bg = ColorLerpF(theme.buttonBase, theme.buttonHover, a);
     DrawRectangleRounded(r, 0.28f, 8, bg);
     DrawRectangleRoundedLinesEx(r, 0.28f, 8, S(1.5f),
@@ -103,6 +122,10 @@ bool Ui::Button(const char* id, Rectangle r, const char* label) {
         float lineW = r.width * 0.72f * EaseOutCubic(a);
         DrawRectangle((int)(r.x + (r.width - lineW) / 2), (int)(r.y + r.height - S(6)),
                       (int)lineW, (int)S(2), Fade(theme.accent, 0.5f * a));
+        DrawPoly({ r.x + S(15), r.y + r.height / 2 }, 4, S(3.5f) * a,
+                 45.0f, Fade(theme.magic, a));
+        DrawPoly({ r.x + r.width - S(15), r.y + r.height / 2 }, 4,
+                 S(3.5f) * a, 45.0f, Fade(theme.magic, a));
     }
     return clicked;
 }

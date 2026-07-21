@@ -6,8 +6,8 @@
 #pragma once
 
 struct AppConfig {
-    int width = 1600;
-    int height = 900;
+    int width = 1200;
+    int height = 700;
     bool fullscreen = false;
     const char* title = "ZION";
 };
@@ -23,6 +23,7 @@ public:
 
     void SetFpsCap(int fps) { fpsCap = fps; }        // 0 = uncapped
     void SetFullscreen(bool on);                     // borderless toggle
+    void SetResolution(int width, int height);       // windowed client size
     bool IsFullscreen() const;
 
 private:

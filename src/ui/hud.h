@@ -20,8 +20,17 @@ public:
         bool menuOpen = false;
         const char* promptVerb = nullptr;   // null = no interact target
         const char* promptKey = "E";
+        const char* zoneName = "Elder Vale";
+        int zoneTier = 1;
+        float cameraYaw = 0.0f;
+        const char* clockText = "9:00 AM";
+        bool showControlHints = false;
         int anima = 0;
         int blessings = 0;
+        bool devMode = false;
+        bool devOverlay = false;
+        bool devFly = false;
+        bool devTurbo = false;
     };
     void Draw(Ui& ui, const DrawParams& p);
 

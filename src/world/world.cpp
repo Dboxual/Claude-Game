@@ -7,7 +7,8 @@
 static const Color STONE    = { 205, 192, 168, 255 };
 static const Color STONE_HI = { 226, 214, 190, 255 };
 static const Color ROCK_C   = { 138, 130, 120, 255 };
-static const Color CRYSTAL  = { 92, 240, 205, 255 };   // emissive teal
+static const Color CRYSTAL  = { 76, 170, 255, 255 };   // shrine-blue emissive
+static const Color SHRINE_SURFACE = { 126, 184, 220, 255 };
 static const Color RUNE     = { 255, 214, 126, 255 };  // emissive gold
 static const Color PORTAL   = { 130, 215, 255, 255 };  // emissive gate glow
 static const float PLAY_MARGIN = 6.0f;                 // hard border inset
@@ -48,13 +49,33 @@ void World::Generate(unsigned int worldSeed, const Terrain& t, const ZoneDef& zd
         return hit;
     };
 
+    // Keep readable travel corridors between the zone hub and every gate.
+    // Natural props are clustered around those routes instead of evenly
+    // peppering the entire map, so clearings and landmarks imply purpose.
+    auto nearTravelRoute = [&](Vector3 p, float corridor) {
+        Vector2 q = { p.x, p.z };
+        for (const GateDef& gate : zdef.gates) {
+            Vector2 end = GateXZ(gate);
+            float len2 = end.x * end.x + end.y * end.y;
+            float along = len2 > 0.0f ? (q.x * end.x + q.y * end.y) / len2 : 0.0f;
+            along = Clamp(along, 0.0f, 1.0f);
+            float dx = q.x - end.x * along;
+            float dz = q.y - end.y * along;
+            if (dx * dx + dz * dz < corridor * corridor) return true;
+        }
+        // Preserve the starter approach even if no gate happens to align with it.
+        if (zdef.temple && fabsf(p.x) < corridor && p.z > -8.0f && p.z < 58.0f)
+            return true;
+        return false;
+    };
+
     // --- Temple of the First Dawn (Elder Vale only) -----------------------
     if (zdef.temple) {
         float plateau = t.plateauHeight;
         platforms.push_back({ { 0, 0 }, 7.5f, plateau + 0.45f });
         { Prop a{}; a.type = PropType::Altar; a.pos = { 0, 0, 0 }; a.boundRadius = 16.0f; Place(t, a); }
         AddCollider({ { 0, 0 }, 1.2f, plateau + 0.45f, plateau + 1.55f });
-        lights.push_back({ { 0, plateau + 3.4f, 0 }, { 0.5f, 1.7f, 1.35f }, 15.0f });
+        lights.push_back({ { 0, plateau + 3.4f, 0 }, { 0.30f, 0.85f, 1.85f }, 15.0f });
         shrines.push_back({ { 0, plateau + 3.1f, 0 }, 0, true });
 
         for (int i = 0; i < 8; i++) {
@@ -95,9 +116,19 @@ void World::Generate(unsigned int worldSeed, const Terrain& t, const ZoneDef& zd
     // --- Wayshrines --------------------------------------------------------
     for (int i = 0; i < zdef.wayshrines; i++) {
         for (int attempt = 0; attempt < 40; attempt++) {
-            float ang = rng.Range(0.0f, PI * 2.0f);
-            float dist = rng.Range(90.0f, ZONE_HALF - 140.0f);
-            Vector3 p = { sinf(ang) * dist, 0, cosf(ang) * dist };
+            Vector3 p = {};
+            if (!zdef.gates.empty()) {
+                Vector2 route = GateXZ(zdef.gates[i % zdef.gates.size()]);
+                float along = rng.Range(0.24f, 0.78f);
+                Vector2 side = Vector2Normalize({ -route.y, route.x });
+                float offset = rng.Range(10.0f, 22.0f) * (rng.Chance(0.5f) ? -1.0f : 1.0f);
+                p = { route.x * along + side.x * offset, 0,
+                      route.y * along + side.y * offset };
+            } else {
+                float ang = rng.Range(0.0f, PI * 2.0f);
+                float dist = rng.Range(90.0f, ZONE_HALF - 140.0f);
+                p = { sinf(ang) * dist, 0, cosf(ang) * dist };
+            }
             if (t.NormalAt(p.x, p.z).y < 0.88f || nearProp(p, 60.0f)) continue;
             Prop s{};
             s.type = PropType::Shrine;
@@ -106,7 +137,7 @@ void World::Generate(unsigned int worldSeed, const Terrain& t, const ZoneDef& zd
             s.boundRadius = 3.5f;
             Place(t, s);
             AddCollider({ { s.pos.x, s.pos.z }, 0.6f, s.pos.y, s.pos.y + 2.0f });
-            lights.push_back({ { s.pos.x, s.pos.y + 2.1f, s.pos.z }, { 1.5f, 1.15f, 0.55f }, 10.0f });
+            lights.push_back({ { s.pos.x, s.pos.y + 2.1f, s.pos.z }, { 0.28f, 0.72f, 1.65f }, 10.0f });
             shrines.push_back({ { s.pos.x, s.pos.y + 2.15f, s.pos.z },
                                 (int)lights.size() - 1, false });
             break;
@@ -152,12 +183,28 @@ void World::Generate(unsigned int worldSeed, const Terrain& t, const ZoneDef& zd
 
     // --- Trees and rocks by biome density ---------------------------------
     int treeTarget = (int)(biome.treeDensity * area1k);
+    std::vector<Vector2> groves;
+    int groveCount = treeTarget > 0 ? fmaxf(1, treeTarget / 34) : 0;
+    groves.reserve(groveCount);
+    for (int i = 0; i < groveCount; i++)
+        groves.push_back({ rng.Range(-ZONE_HALF + 70.0f, ZONE_HALF - 70.0f),
+                           rng.Range(-ZONE_HALF + 70.0f, ZONE_HALF - 70.0f) });
     int placedTrees = 0;
-    for (int i = 0; i < treeTarget * 2 && placedTrees < treeTarget; i++) {
-        Vector3 p = { rng.Range(-ZONE_HALF + 40.0f, ZONE_HALF - 40.0f), 0,
-                      rng.Range(-ZONE_HALF + 40.0f, ZONE_HALF - 40.0f) };
+    for (int i = 0; i < treeTarget * 5 && placedTrees < treeTarget; i++) {
+        Vector3 p;
+        if (!groves.empty() && rng.Chance(0.82f)) {
+            const Vector2& g = groves[rng.RangeI(0, (int)groves.size() - 1)];
+            float a = rng.Range(0.0f, PI * 2.0f);
+            float d = rng.Range(4.0f, 46.0f);
+            p = { g.x + cosf(a) * d, 0, g.y + sinf(a) * d };
+        } else {
+            p = { rng.Range(-ZONE_HALF + 40.0f, ZONE_HALF - 40.0f), 0,
+                  rng.Range(-ZONE_HALF + 40.0f, ZONE_HALF - 40.0f) };
+        }
+        if (fabsf(p.x) > ZONE_HALF - 40.0f || fabsf(p.z) > ZONE_HALF - 40.0f) continue;
         float centerDist = sqrtf(p.x * p.x + p.z * p.z);
         if (zdef.temple && centerDist < 36.0f) continue;
+        if (nearTravelRoute(p, 8.0f)) continue;
         if (t.NormalAt(p.x, p.z).y < 0.86f) continue;
         if (nearProp(p, 6.0f)) continue;
         Prop tr{};
@@ -174,11 +221,27 @@ void World::Generate(unsigned int worldSeed, const Terrain& t, const ZoneDef& zd
     }
 
     int rockTarget = (int)(biome.rockDensity * area1k);
+    std::vector<Vector2> boulderFields;
+    int fieldCount = rockTarget > 0 ? fmaxf(1, rockTarget / 26) : 0;
+    boulderFields.reserve(fieldCount);
+    for (int i = 0; i < fieldCount; i++)
+        boulderFields.push_back({ rng.Range(-ZONE_HALF + 45.0f, ZONE_HALF - 45.0f),
+                                  rng.Range(-ZONE_HALF + 45.0f, ZONE_HALF - 45.0f) });
     int placedRocks = 0;
-    for (int i = 0; i < rockTarget * 2 && placedRocks < rockTarget; i++) {
-        Vector3 p = { rng.Range(-ZONE_HALF + 20.0f, ZONE_HALF - 20.0f), 0,
-                      rng.Range(-ZONE_HALF + 20.0f, ZONE_HALF - 20.0f) };
+    for (int i = 0; i < rockTarget * 5 && placedRocks < rockTarget; i++) {
+        Vector3 p;
+        if (!boulderFields.empty() && rng.Chance(0.72f)) {
+            const Vector2& f = boulderFields[rng.RangeI(0, (int)boulderFields.size() - 1)];
+            float a = rng.Range(0.0f, PI * 2.0f);
+            float d = rng.Range(2.0f, 34.0f);
+            p = { f.x + cosf(a) * d, 0, f.y + sinf(a) * d };
+        } else {
+            p = { rng.Range(-ZONE_HALF + 20.0f, ZONE_HALF - 20.0f), 0,
+                  rng.Range(-ZONE_HALF + 20.0f, ZONE_HALF - 20.0f) };
+        }
+        if (fabsf(p.x) > ZONE_HALF - 20.0f || fabsf(p.z) > ZONE_HALF - 20.0f) continue;
         if (zdef.temple && sqrtf(p.x * p.x + p.z * p.z) < 20.0f) continue;
+        if (nearTravelRoute(p, 4.5f)) continue;
         if (nearProp(p, 4.0f)) continue;
         Prop rk{};
         rk.type = PropType::Rock;
@@ -192,6 +255,45 @@ void World::Generate(unsigned int worldSeed, const Terrain& t, const ZoneDef& zd
             AddCollider({ { p.x, p.z }, 0.9f * rk.scale,
                           rk.pos.y, rk.pos.y + 1.5f * rk.scale });
         placedRocks++;
+    }
+
+    // --- Clean grass coverage ----------------------------------------------
+    // Grass is the only new ground detail in this pass: broad meadow patches,
+    // no twigs, loose branches, pebbles, or decorative litter.
+    int grassTarget = (int)((2.40f + biome.treeDensity * 0.22f) * area1k);
+    std::vector<Vector2> meadows;
+    int meadowCount = grassTarget > 0 ? 28 : 0;
+    meadows.reserve(meadowCount);
+    for (int i = 0; i < meadowCount; i++)
+        meadows.push_back({ rng.Range(-ZONE_HALF + 35.0f, ZONE_HALF - 35.0f),
+                            rng.Range(-ZONE_HALF + 35.0f, ZONE_HALF - 35.0f) });
+
+    int placedGrass = 0;
+    for (int i = 0; i < grassTarget * 4 && placedGrass < grassTarget; i++) {
+        Vector3 p;
+        if (!meadows.empty() && rng.Chance(0.58f)) {
+            const Vector2& m = meadows[rng.RangeI(0, (int)meadows.size() - 1)];
+            float a = rng.Range(0.0f, PI * 2.0f);
+            float d = rng.Range(2.0f, 58.0f);
+            p = { m.x + cosf(a) * d, 0, m.y + sinf(a) * d };
+        } else {
+            p = { rng.Range(-ZONE_HALF + 18.0f, ZONE_HALF - 18.0f), 0,
+                  rng.Range(-ZONE_HALF + 18.0f, ZONE_HALF - 18.0f) };
+        }
+        if (fabsf(p.x) > ZONE_HALF - 18.0f || fabsf(p.z) > ZONE_HALF - 18.0f) continue;
+        if (zdef.temple && sqrtf(p.x * p.x + p.z * p.z) < 19.0f) continue;
+        if (nearTravelRoute(p, 1.3f)) continue;
+        if (t.NormalAt(p.x, p.z).y < 0.93f) continue;
+
+        Prop grass{};
+        grass.type = PropType::GrassPatch;
+        grass.pos = p;
+        grass.yaw = rng.Range(0.0f, PI * 2.0f);
+        grass.scale = rng.Range(0.75f, 1.18f);
+        grass.tint = rng.Range(0.84f, 1.08f);
+        grass.boundRadius = 2.2f * grass.scale;
+        Place(t, grass);
+        placedGrass++;
     }
 
     // Spawn: temple approach in Elder Vale, else a clearing near center.
@@ -304,7 +406,7 @@ void World::DrawProp(Renderer& r, const Prop& p, float time) const {
         case PropType::BrokenColumn: {
             r.DrawLit(r.cube, PartXf(p, { 0, 0.15f, 0 }, { 1.5f, 0.3f, 1.5f }), stone);
             r.DrawLit(r.cylinder, PartXf(p, { 0, 0.3f, 0 }, { 0.9f, 1.9f, 0.9f }), stone);
-            r.DrawLit(r.sphere, PartXf(p, { 1.6f, 0.35f, 0.6f }, { 1.0f, 0.7f, 1.0f }), ColorMul(STONE, p.tint * 0.92f));
+            r.DrawLit(r.facetedSphere, PartXf(p, { 1.6f, 0.35f, 0.6f }, { 1.0f, 0.7f, 1.0f }), ColorMul(STONE, p.tint * 0.92f));
             break;
         }
         case PropType::Monolith: {
@@ -320,19 +422,34 @@ void World::DrawProp(Renderer& r, const Prop& p, float time) const {
         }
         case PropType::Tree: {
             Color canopy = ColorMul(ColorLerpF(b.canopyA, b.canopyB, p.tint - 0.8f), p.tint);
-            r.DrawLit(r.cylinder, PartXf(p, { 0, 0, 0 }, { 0.55f, 2.7f, 0.55f }), ColorMul(b.trunk, p.tint));
-            r.DrawLit(r.sphere, PartXf(p, { 0, 3.4f, 0 }, { 3.2f, 2.6f, 3.2f }), canopy);
-            r.DrawLit(r.sphere, PartXf(p, { 0.9f, 2.9f, 0.5f }, { 1.9f, 1.6f, 1.9f }), ColorMul(canopy, 0.92f));
-            r.DrawLit(r.sphere, PartXf(p, { -0.8f, 4.3f, -0.3f }, { 1.7f, 1.5f, 1.7f }), ColorMul(canopy, 1.08f));
+            Color trunkC = ColorMul(b.trunk, p.tint);
+            // Tapered trunk (cone: wider at the base, narrowing into the leaves)
+            // over a short root flare -> reads as a trunk, not a pole.
+            r.DrawLit(r.cone, PartXf(p, { 0, 0.0f, 0 }, { 0.85f, 4.2f, 0.85f }), trunkC);
+            r.DrawLit(r.cylinder, PartXf(p, { 0, 0.0f, 0 }, { 0.72f, 0.55f, 0.72f }), ColorMul(trunkC, 0.9f));
+            // Clumpy, layered canopy from several overlapping blobs of varied
+            // size and shade -> an organic leafy mass instead of one ball.
+            r.DrawLit(r.facetedSphere, PartXf(p, { 0.0f, 3.6f, 0.0f }, { 2.9f, 2.8f, 2.9f }), canopy);
+            r.DrawLit(r.facetedSphere, PartXf(p, { 1.25f, 3.9f, 0.45f }, { 1.9f, 1.9f, 1.9f }), ColorMul(canopy, 0.9f));
+            r.DrawLit(r.facetedSphere, PartXf(p, { -1.15f, 3.7f, -0.5f }, { 1.8f, 1.8f, 1.8f }), ColorMul(canopy, 1.09f));
+            r.DrawLit(r.facetedSphere, PartXf(p, { 0.15f, 4.85f, -0.25f }, { 1.9f, 1.9f, 1.9f }), ColorMul(canopy, 1.03f));
             break;
         }
         case PropType::Rock: {
-            r.DrawLit(r.sphere, PartXf(p, { 0, 0.35f, 0 }, { 1.9f, 1.1f, 1.5f }), ColorMul(ROCK_C, p.tint));
-            r.DrawLit(r.sphere, PartXf(p, { 0.8f, 0.2f, 0.4f }, { 1.0f, 0.7f, 0.9f }), ColorMul(ROCK_C, p.tint * 0.92f));
+            r.DrawLit(r.facetedSphere, PartXf(p, { 0, 0.35f, 0 }, { 1.9f, 1.1f, 1.5f }), ColorMul(ROCK_C, p.tint));
+            r.DrawLit(r.facetedSphere, PartXf(p, { 0.8f, 0.2f, 0.4f }, { 1.0f, 0.7f, 0.9f }), ColorMul(ROCK_C, p.tint * 0.92f));
+            break;
+        }
+        case PropType::GrassPatch: {
+            float blend = Saturate((p.tint - 0.84f) / 0.24f);
+            Color grass = ColorLerpF(b.grassA, b.grassB, blend);
+            r.DrawLit(r.grassPatch, PartXf(p, { 0, 0.015f, 0 }, { 1, 1, 1 }),
+                      ColorMul(grass, 1.08f), 0.045f);
             break;
         }
         case PropType::Shrine: {
-            r.DrawLit(r.cylinder, PartXf(p, { 0, 0, 0 }, { 1.7f, 0.4f, 1.7f }), stone);
+            r.DrawLit(r.cylinder, PartXf(p, { 0, 0, 0 }, { 1.7f, 0.4f, 1.7f }),
+                      ColorMul(SHRINE_SURFACE, p.tint), 0.10f);
             r.DrawLit(r.cylinder, PartXf(p, { 0, 0.4f, 0 }, { 0.7f, 1.1f, 0.7f }), ColorMul(STONE_HI, p.tint));
             float bob = sinf(time * 1.6f + p.pos.z * 0.5f) * 0.12f;
             float spin = time * 0.9f;
@@ -346,8 +463,10 @@ void World::DrawProp(Renderer& r, const Prop& p, float time) const {
         }
         case PropType::Altar: {
             r.DrawLit(r.cylinder, PartXf(p, { 0, 0, 0 }, { 17.0f, 0.25f, 17.0f }), ColorMul(STONE, 0.78f));
-            r.DrawLit(r.cylinder, PartXf(p, { 0, 0.25f, 0 }, { 15.0f, 0.2f, 15.0f }), ColorMul(STONE, 0.86f));
-            r.DrawLit(r.cube, PartXf(p, { 0, 1.0f, 0 }, { 2.2f, 1.1f, 2.2f }), ColorMul(STONE_HI, p.tint));
+            r.DrawLit(r.cylinder, PartXf(p, { 0, 0.25f, 0 }, { 15.0f, 0.2f, 15.0f }),
+                      SHRINE_SURFACE, 0.14f);
+            r.DrawLit(r.cube, PartXf(p, { 0, 1.0f, 0 }, { 2.2f, 1.1f, 2.2f }),
+                      ColorMul(SHRINE_SURFACE, 0.88f), 0.12f);
             float bob = sinf(time * 1.2f) * 0.18f;
             float spin = time * 0.6f;
             r.DrawLit(r.cone, PartXf(p, { 0, 3.1f + bob, 0 }, { 0.9f, 1.2f, 0.9f }, spin), CRYSTAL, 1.0f);
@@ -377,6 +496,10 @@ void World::Draw(Renderer& r, Vector3 camPos, float viewDistance, float time) co
     for (int i : scratch) {
         const Prop& p = props[i];
         float dx = p.pos.x - camPos.x, dz = p.pos.z - camPos.z;
+        if (p.type == PropType::GrassPatch && dx * dx + dz * dz > 105.0f * 105.0f) {
+            r.stats.culledProps++;
+            continue;
+        }
         if (dx * dx + dz * dz > vd2) { r.stats.culledProps++; continue; }
         Vector3 center = { p.pos.x, p.pos.y + p.boundRadius * 0.5f, p.pos.z };
         if (!r.Visible(center, p.boundRadius)) { r.stats.culledProps++; continue; }

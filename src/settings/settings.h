@@ -7,6 +7,8 @@ class InputSystem;
 
 struct GraphicsSettings {
     bool fullscreen = false;
+    int width = 1200;
+    int height = 700;
     int fpsCap = 240;                // 0 = uncapped (vsync still gates)
     float renderScale = 1.0f;        // 0.5 .. 1.25, scene RT resolution factor
     float fovY = 70.0f;              // degrees, first-person baseline
@@ -36,3 +38,8 @@ struct Settings {
     void Load(InputSystem& input);         // missing file/keys -> defaults kept
     void Save(const InputSystem& input) const;
 };
+
+// Window dimensions must be known before InitWindow on macOS: resizing a
+// non-HiDPI raylib window after creation can desynchronize Cocoa points from
+// the framebuffer. This narrow startup read avoids initializing input/UI early.
+bool LoadStartupGraphics(GraphicsSettings& graphics);

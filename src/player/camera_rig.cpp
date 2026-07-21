@@ -7,11 +7,11 @@
 static constexpr float PITCH_LIMIT = 88.0f * DEG2RAD;
 static constexpr float BLEND_RATE = 11.0f;         // FP<->TP transition speed
 static constexpr float BOB_FREQ = 1.55f;           // cycles per meter walked
-static constexpr float BOB_AMP_WALK = 0.040f;
-static constexpr float BOB_AMP_SPRINT = 0.062f;
+static constexpr float BOB_AMP_WALK = 0.0f;
+static constexpr float BOB_AMP_SPRINT = 0.0f;
 static constexpr float DIP_STIFFNESS = 90.0f;      // landing spring
 static constexpr float DIP_DAMPING = 14.0f;
-static constexpr float SPRINT_FOV_KICK = 7.0f;     // degrees
+static constexpr float SPRINT_FOV_KICK = 4.0f;     // degrees
 static constexpr float TP_ARM = 4.6f;              // desired boom length (m)
 static constexpr float TP_SHOULDER = 0.55f;        // right offset (m)
 static constexpr float TP_PIVOT_HEIGHT = 1.55f;
@@ -67,7 +67,7 @@ Camera3D CameraRig::Update(float dt, Vector3 feet, Vector3 vel, bool grounded,
 
     // First-person eye.
     float bobY = sinf(bobPhase * 2.0f) * bobAmp;
-    float bobX = sinf(bobPhase) * bobAmp * 0.55f;
+    float bobX = 0.0f;
     Vector3 fpEye = {
         feet.x + rt.x * bobX,
         feet.y + PlayerController::EYE + bobY + dip,

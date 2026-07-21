@@ -32,6 +32,9 @@ public:
     void EndScene();
 
     void DrawLit(const Mesh& mesh, Matrix transform, Color tint, float emissive = 0.0f);
+    // Set the shared emissive uniform directly (e.g. before a raw DrawModel*),
+    // keeping DrawLit's cache in sync so the next primitive draw isn't skipped.
+    void SetEmissive(float e);
     bool Visible(const BoundingBox& box) const { return frustum.VisibleAABB(box); }
     bool Visible(Vector3 center, float radius) const { return frustum.VisibleSphere(center, radius); }
 
@@ -45,6 +48,8 @@ public:
     Mesh cylinder = {};   // r=0.5 h=1, base at origin, +Y
     Mesh cone = {};       // r=0.5 h=1, base at origin, +Y
     Mesh sphere = {};     // r=0.5 centered
+    Mesh facetedSphere = {}; // low-poly r=0.5, for grounded natural forms
+    Mesh grassPatch = {}; // several crossed tapered blades, one draw call
 
 private:
     Frustum frustum;

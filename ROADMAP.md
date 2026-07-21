@@ -3,6 +3,15 @@
 Work happens in phases. Each phase ends with a playable, tested, optimized,
 polished build before the next begins. A phase may span many sessions.
 
+For the exhaustive sandbox-MMO feature/parity matrix, build gates, and UI
+delivery order, read **MASTER_ROADMAP.md**. For the PS2-era mythic art, UI,
+FX, animation, and palette rules, read **VISUAL_DIRECTION.md**. This file is
+the compact phase view.
+
+For the versioned, researched, literal feature checklist and FP/TP acceptance
+contract, read **ALBION_PARITY_CHECKLIST.md**. It is authoritative for system
+coverage; this file remains the compact delivery sequence.
+
 > **2026-07-20 direction update:** the world is a graph of HUGE zones
 > (1280 m+ per side), each zone an isolated simulation island — the same
 > shape Albion uses (one server instance per zone, hard border transitions).
@@ -33,6 +42,7 @@ Deliverables:
 - Audio framework (buses, synthesized SFX, ambience)
 - Particle framework (pooled, budgeted, scalable)
 - Lighting framework (sun + hemisphere ambient + point lights + height fog)
+- Biome-aware day/night presentation foundation and visible world clock
 - Optimization framework (frustum/distance culling, render scale, debug
   overlay with timings, graphics quality options)
 - A small handcrafted-feeling zone ("Elder Vale") that validates all of the
@@ -47,7 +57,7 @@ cameras validated for combat.
 
 ## Phase 3 — Gathering & Progression Core
 
-Resource nodes (wood/ore/stone/fiber/hide) with tiered spawns, gathering
+Resource nodes (wood/ore/stone/fiber/hide/fish) with tiered spawns, gathering
 tools, destruction payoffs, inventory + equipment data model, the classless
 "use it to level it" progression board (original design), item tiers and
 quality.
@@ -60,7 +70,8 @@ materials, local storage/banks, NPC vendors as placeholder economy.
 ## Phase 5 — World at Scale
 
 Zone streaming, multiple biomes, dungeons (entrance → instanced layout),
-mounts, fast-travel rules, day/night, weather.
+mounts, fast-travel rules, authoritative day/night persistence/gameplay hooks,
+weather.
 
 ## Phase 6 — Multiplayer Foundation
 

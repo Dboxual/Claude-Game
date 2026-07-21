@@ -8,15 +8,18 @@
 #include <unordered_map>
 
 struct UiTheme {
-    Color panel = { 16, 22, 34, 232 };
-    Color panelBorder = { 92, 108, 148, 120 };
-    Color text = { 226, 232, 244, 255 };
-    Color textDim = { 148, 158, 182, 255 };
-    Color accent = { 235, 200, 120, 255 };      // ancient gold
-    Color accentGlow = { 255, 224, 150, 255 };
-    Color buttonBase = { 30, 40, 62, 220 };
-    Color buttonHover = { 48, 62, 94, 235 };
-    Color track = { 52, 62, 88, 255 };
+    Color panel = { 11, 20, 34, 238 };          // night ink
+    Color panelRaised = { 20, 35, 52, 242 };
+    Color panelBorder = { 82, 119, 138, 170 };
+    Color text = { 232, 227, 211, 255 };         // bone white
+    Color textDim = { 145, 168, 192, 255 };      // mist blue
+    Color accent = { 213, 168, 79, 255 };        // ancient gold
+    Color accentGlow = { 255, 215, 122, 255 };   // candle gold
+    Color magic = { 120, 232, 208, 255 };        // spirit teal
+    Color danger = { 240, 123, 89, 255 };        // ember coral
+    Color buttonBase = { 20, 35, 52, 232 };
+    Color buttonHover = { 31, 61, 74, 246 };
+    Color track = { 39, 57, 76, 255 };
 };
 
 class Ui {

@@ -7,21 +7,45 @@
 
 // ---- title ----------------------------------------------------------------
 
-TitleAction DrawTitleMenu(Ui& ui, bool hasSave, float time) {
+TitleAction DrawTitleMenu(Ui& ui, bool hasSave, const char* zoneName, float time) {
     float w = ui.ScreenW(), h = ui.ScreenH();
 
-    // Wordmark with a slow golden breath.
-    float pulse = 0.9f + 0.1f * sinf(time * 1.4f);
-    ui.LabelCentered({ w / 2 + ui.S(3), h * 0.24f + ui.S(3) }, "Z I O N", 96,
-                     Fade(BLACK, 0.45f));
-    ui.LabelCentered({ w / 2, h * 0.24f }, "Z I O N", 96,
-                     ColorMul(ui.theme.accentGlow, pulse));
-    ui.LabelCentered({ w / 2, h * 0.24f + ui.S(64) },
-                     "the vale remembers", 24, Fade(ui.theme.text, 0.75f));
+    // A dark wayfinder's-archive slab anchors the controls while the living
+    // world remains the hero on the right. The gradient is deliberately broad
+    // enough to preserve text contrast over every biome/title-camera angle.
+    float pw = fmaxf(ui.S(420), fminf(w * 0.42f, ui.S(540)));
+    DrawRectangleGradientH(0, 0, (int)(pw + ui.S(170)), (int)h,
+                           Color{ 6, 12, 23, 250 }, Color{ 6, 12, 23, 0 });
+    DrawRectangle(0, 0, (int)pw, (int)h, Color{ 7, 15, 27, 228 });
+    DrawRectangle((int)(pw - ui.S(2)), 0, (int)ui.S(2), (int)h,
+                  Fade(ui.theme.magic, 0.42f));
 
-    float bw = ui.S(300), bh = ui.S(54), gap = ui.S(16);
-    float x = (w - bw) / 2;
-    float y = h * 0.46f;
+    float x = ui.S(58);
+    float contentW = pw - ui.S(110);
+    float top = h * 0.105f;
+
+    // Small orbiting rune behind the chapter label gives the otherwise flat
+    // menu a quiet magical pulse without competing with the world scene.
+    float pulse = 0.9f + 0.1f * sinf(time * 1.4f);
+    Vector2 seal = { x + ui.S(7), top + ui.S(4) };
+    DrawCircleLinesV(seal, ui.S(12 + pulse * 2), Fade(ui.theme.magic, 0.28f));
+    DrawPolyLinesEx(seal, 4, ui.S(7), 45.0f + time * 8.0f, ui.S(1),
+                    Fade(ui.theme.accent, 0.55f));
+    ui.Label({ x + ui.S(28), top - ui.S(7) }, "THE FIRST HORIZON", 14,
+             ui.theme.magic);
+
+    ui.DrawTextC("ZION", { x, top + ui.S(30) }, ui.S(76),
+                 ColorMul(ui.theme.accentGlow, pulse));
+    ui.Label({ x, top + ui.S(111) }, "THE VEILBOUND AGE", 18, ui.theme.text);
+    DrawRectangle((int)x, (int)(top + ui.S(142)), (int)ui.S(76), (int)ui.S(2),
+                  ui.theme.accent);
+    ui.Label({ x, top + ui.S(160) }, "Beyond the old gods, the land remembers.",
+             17, ui.theme.textDim);
+    ui.Label({ x, top + ui.S(183) }, "Walk softly. Build boldly. Leave a legend.",
+             17, ui.theme.textDim);
+
+    float bw = contentW, bh = ui.S(50), gap = ui.S(13);
+    float y = fmaxf(top + ui.S(230), h * 0.46f);
     TitleAction action = TitleAction::None;
 
     if (hasSave) {
@@ -40,8 +64,15 @@ TitleAction DrawTitleMenu(Ui& ui, bool hasSave, float time) {
         action = TitleAction::Quit;
 
     // ASCII only: the UI font atlas bakes the default 95-glyph set.
-    ui.Label({ ui.S(16), h - ui.S(30) }, "Zion 0.1.0 - Phase 1: Foundation", 16,
-             Fade(ui.theme.textDim, 0.8f));
+    ui.Label({ x, h - ui.S(54) }, "FOUNDATION BUILD 0.1", 13,
+             Fade(ui.theme.magic, 0.72f));
+    ui.Label({ x, h - ui.S(34) }, "NATIVE DESKTOP  |  FP + TP", 12,
+             Fade(ui.theme.textDim, 0.72f));
+
+    const char* view = TextFormat("LIVE VIEW  |  %s", zoneName);
+    float vw = ui.TextWidth(view, ui.S(12));
+    ui.DrawTextC(view, { w - vw - ui.S(20), h - ui.S(30) }, ui.S(12),
+                 Fade(ui.theme.text, 0.68f));
     return action;
 }
 
@@ -76,10 +107,23 @@ PauseAction DrawPauseMenu(Ui& ui) {
 
 static const int FPS_CAPS[] = { 60, 120, 144, 240, 0 };
 static const char* FPS_LABELS[] = { "60", "120", "144", "240", "Uncapped" };
+static const int RES_W[] = { 960, 1024, 1152, 1200, 1280, 1600, 1920, 1920, 2560 };
+static const int RES_H[] = { 540, 576, 648, 700, 720, 900, 1080, 1200, 1440 };
+static const char* RES_LABELS[] = {
+    "960 x 540", "1024 x 576", "1152 x 648", "1200 x 700", "1280 x 720",
+    "1600 x 900", "1920 x 1080", "1920 x 1200", "2560 x 1440"
+};
+static constexpr int RES_COUNT = sizeof(RES_W) / sizeof(RES_W[0]);
 
 static int FpsCapToIndex(int cap) {
     for (int i = 0; i < 5; i++) if (FPS_CAPS[i] == cap) return i;
     return 3;
+}
+
+static int ResolutionToIndex(int width, int height) {
+    for (int i = 0; i < RES_COUNT; i++)
+        if (RES_W[i] == width && RES_H[i] == height) return i;
+    return 0;
 }
 
 SettingsAction DrawSettingsMenu(Ui& ui, MenuState& ms, Settings& s, InputSystem& input) {
@@ -112,7 +156,20 @@ SettingsAction DrawSettingsMenu(Ui& ui, MenuState& ms, Settings& s, InputSystem&
     float rh = ui.S(44), gap = ui.S(10);
 
     if (ms.settingsTab == 0) {
-        ui.Toggle("gfx.fullscreen", { x, y, rw, rh }, "Fullscreen (borderless)", s.gfx.fullscreen);
+        ui.Toggle("gfx.fullscreen", { x, y, rw, rh }, "Borderless Fullscreen", s.gfx.fullscreen);
+        y += rh + gap;
+        int resIdx = ResolutionToIndex(s.gfx.width, s.gfx.height);
+        const char* resolutionLabel =
+#if defined(__APPLE__)
+            "Window Resolution (restart required)";
+#else
+            "Window Resolution";
+#endif
+        if (ui.Selector("gfx.resolution", { x, y, rw, rh }, resolutionLabel,
+                        resIdx, RES_LABELS, RES_COUNT)) {
+            s.gfx.width = RES_W[resIdx];
+            s.gfx.height = RES_H[resIdx];
+        }
         y += rh + gap;
         int fpsIdx = FpsCapToIndex(s.gfx.fpsCap);
         if (ui.Selector("gfx.fps", { x, y, rw, rh }, "FPS Cap", fpsIdx, FPS_LABELS, 5))

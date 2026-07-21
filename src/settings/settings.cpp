@@ -7,6 +7,22 @@
 
 using nlohmann::json;
 
+bool LoadStartupGraphics(GraphicsSettings& graphics) {
+    std::ifstream f(SettingsFilePath());
+    if (!f.is_open()) return false;
+    try {
+        json j = json::parse(f);
+        const json& g = j.value("graphics", json::object());
+        graphics.fullscreen = g.value("fullscreen", graphics.fullscreen);
+        graphics.width = g.value("width", graphics.width);
+        graphics.height = g.value("height", graphics.height);
+        return true;
+    } catch (const std::exception& e) {
+        LOG_WARN("Startup graphics unreadable (%s); using window defaults", e.what());
+        return false;
+    }
+}
+
 // value<T> with defaults keeps old settings files forward-compatible: new
 // fields simply fall back instead of failing the whole load.
 void Settings::Load(InputSystem& input) {
@@ -19,6 +35,8 @@ void Settings::Load(InputSystem& input) {
         json j = json::parse(f);
         const json& g = j.value("graphics", json::object());
         gfx.fullscreen      = g.value("fullscreen", gfx.fullscreen);
+        gfx.width           = g.value("width", gfx.width);
+        gfx.height          = g.value("height", gfx.height);
         gfx.fpsCap          = g.value("fps_cap", gfx.fpsCap);
         gfx.renderScale     = g.value("render_scale", gfx.renderScale);
         gfx.fovY            = g.value("fov", gfx.fovY);
@@ -54,6 +72,8 @@ void Settings::Save(const InputSystem& input) const {
     json j;
     j["graphics"] = {
         { "fullscreen", gfx.fullscreen },
+        { "width", gfx.width },
+        { "height", gfx.height },
         { "fps_cap", gfx.fpsCap },
         { "render_scale", gfx.renderScale },
         { "fov", gfx.fovY },

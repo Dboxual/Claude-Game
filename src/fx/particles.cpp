@@ -125,7 +125,8 @@ void ParticleSystem::WispTrail(Vector3 pos, Color color) {
     p.vel = { RandRange(-0.15f, 0.15f), RandRange(-0.05f, 0.25f), RandRange(-0.15f, 0.15f) };
     p.life = RandRange(0.3f, 0.55f);
     p.sizeA = 0.16f; p.sizeB = 0.02f;
-    p.colA = color; p.colB = { color.r, color.g, color.b, 0 };
+    p.colA = { color.r, color.g, color.b, 185 };
+    p.colB = { color.r, color.g, color.b, 0 };
     p.additive = true;
     Emit(p);
 }

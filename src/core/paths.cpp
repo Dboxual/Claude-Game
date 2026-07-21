@@ -4,28 +4,40 @@
 
 namespace fs = std::filesystem;
 
+static std::string dataOverride;
+static std::string cachedDataDir;
+
 static std::string EnsureDir(const std::string& path) {
     std::error_code ec;
     fs::create_directories(path, ec);   // best effort; callers handle IO failure
     return path;
 }
 
+void SetUserDataOverride(const std::string& path) {
+    // UserDataDir is queried only after argument parsing. Ignore late changes
+    // so every subsystem agrees on one directory for the whole process.
+    if (cachedDataDir.empty()) dataOverride = path;
+}
+
 std::string UserDataDir() {
-    static std::string cached;
-    if (!cached.empty()) return cached;
+    if (!cachedDataDir.empty()) return cachedDataDir;
+    if (!dataOverride.empty()) {
+        cachedDataDir = dataOverride;
+        return EnsureDir(cachedDataDir);
+    }
 
 #if defined(_WIN32)
     const char* base = getenv("APPDATA");
-    cached = base ? std::string(base) + "/Zion" : std::string("userdata");
+    cachedDataDir = base ? std::string(base) + "/Zion" : std::string("userdata");
 #elif defined(__APPLE__)
     const char* home = getenv("HOME");
-    cached = home ? std::string(home) + "/Library/Application Support/Zion"
-                  : std::string("userdata");
+    cachedDataDir = home ? std::string(home) + "/Library/Application Support/Zion"
+                         : std::string("userdata");
 #else
     const char* home = getenv("HOME");
-    cached = home ? std::string(home) + "/.local/share/zion" : std::string("userdata");
+    cachedDataDir = home ? std::string(home) + "/.local/share/zion" : std::string("userdata");
 #endif
-    return EnsureDir(cached);
+    return EnsureDir(cachedDataDir);
 }
 
 std::string SettingsFilePath() { return UserDataDir() + "/settings.json"; }

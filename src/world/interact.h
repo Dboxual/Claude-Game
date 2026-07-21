@@ -19,7 +19,7 @@ struct Interactable {
     int lightIndex = -1;     // world light this boosts when activated
     float rearm = 0.0f;      // seconds until usable again
     float glow = 0.0f;       // 0..1 activation flash, decays; drives light boost
-    std::string verb = "Commune";
+    std::string verb = "Draw Anima";
     int payload = -1;        // ZoneGate: index into the ZoneDef gate list
 };
 
@@ -27,6 +27,7 @@ struct Interactable {
 struct Wisp {
     Vector3 pos;
     Vector3 vel;
+    Color color = { 140, 245, 215, 255 };
     float age = 0.0f;
     float delay = 0.0f;      // scatter time before homing starts
     bool alive = false;
@@ -49,6 +50,8 @@ public:
 
     // Fires `index` if armed: spawns a wisp burst, returns false if on cooldown.
     bool Activate(int index, int wispCount);
+    // Shared reward path used by production activations and opt-in dev tests.
+    void SpawnReward(Vector3 origin, int wispCount);
 
     InteractEvents Update(float dt, Vector3 playerChest, ParticleSystem& fx);
 

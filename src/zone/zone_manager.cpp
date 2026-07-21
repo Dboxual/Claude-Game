@@ -17,7 +17,8 @@ void ZoneInstance::Generate(unsigned int worldSeed, int zoneId) {
     for (const ShrineInfo& s : world.Shrines())
         interact.Add({ s.heart ? InteractType::HeartShrine : InteractType::Wayshrine,
                        s.crystalPos, s.heart ? 4.5f : 3.4f, s.lightIndex,
-                       0.0f, 0.0f, "Commune", -1 });
+                       0.0f, 0.0f,
+                       s.heart ? "Attune Waystone" : "Draw Anima", -1 });
     for (const GateWorldInfo& g : world.Gates()) {
         const GateDef& gd = def->gates[g.gateIndex];
         interact.Add({ InteractType::ZoneGate, g.pos, 4.5f, -1, 0.0f, 0.0f,

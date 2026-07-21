@@ -9,14 +9,54 @@ strike it through or move it to Done.
       full spec in CODEX_HANDOFF.md §6. The handoff file is the
       authoritative backlog from here; keep both it and this file updated.
 
+## Foundation usability and world-feel — completed 2026-07-21
+
+- [x] Add researched `ALBION_PARITY_CHECKLIST.md` covering the live 2026 feature
+      set, original-expression boundary, FP/TP translation, schemas, and tests
+- [x] Make Escape a permanent safety key and title-screen exit route; prevent
+      its opening press from being re-consumed as an immediate pause-menu resume
+- [x] Add persisted resolution choices to Graphics settings (live on Windows;
+      pre-window startup apply/restart on macOS to avoid raylib Retina corruption)
+- [x] Make the active character face camera-forward at every yaw, independent
+      of forward/back/strafe travel direction
+- [x] Replace wall-clock/root-bounce walking with planted, distance-driven stride,
+      zero head bob, and render-only ground-height smoothing
+- [x] Add biome-aware day/night lighting/sky/fog and a HUD clock
+- [x] Add an opt-in `--dev` creative panel and isolated test-data support
+- [x] Add provisional vitals/ability-bar HUD template
+- [x] Turn uniform scatter into groves, boulder fields, clear routes, and
+      route-adjacent Echo Wells; make the central Waystone a save anchor
+- [x] Replace smooth natural-form spheres with a faceted low-poly mesh baseline
+- [x] Add clean, non-colliding grass coverage while keeping roads/hubs readable;
+      add no branch, pebble, or litter scatter
+
+## Presentation identity — completed 2026-07-21
+
+- [x] Add the exhaustive sandbox-MMO feature parity/build-gate plan in
+      MASTER_ROADMAP.md and the PS2 mythic art/UI/FX bible in
+      VISUAL_DIRECTION.md
+- [x] Establish the Wayfinder's Archive UI palette and ornamented global
+      panel/button material
+- [x] Recompose the title screen as an ink-glass navigation slab over a live
+      world vista
+- [x] Add gameplay zone/risk plaque, live heading compass, short onboarding
+      control card, and anima/Ledger reward plate
+- [x] Upgrade crosshair, interaction prompt, and reward banner presentation
+- [x] Give XP/anima wisps clearly pulsing violet and gold families with emissive
+      halos and orbiting sparks
+- [x] Replace the central shrine's pinkish illumination with a blue crystal,
+      blue light, and cool-blue altar surface
+- [x] Add permission-free PNG-frame/WebP recordings plus a normal-mode action
+      tour covering WASD, sprint, jump, camera look/toggle, interact, F3, and Esc
+
 ## Next up (Phase 1 polish candidates — now Epic B of CODEX_HANDOFF.md)
 
 - [ ] Gamepad support in the input system (bindings reserve space for it)
 - [ ] Footstep material variation (grass vs stone via terrain paint lookup)
-- [ ] More mid-ground set dressing: flower patches, fallen logs, path stones
+- [ ] Biome-specific grass/flower variation without branches, loose rocks, or litter
 - [ ] God-ray-ish post shader when facing the sun
-- [ ] Player body: simple walk-cycle lean/bob (animation framework seed)
-- [ ] Settings: resolution picker (currently borderless/window only)
+- [ ] Extract player poses into a reusable `src/anim/` framework
+- [ ] Settings: apply-and-confirm countdown for disruptive display changes
 - [ ] macOS build verification (scripts exist, untested this round)
 
 ## Phase 1 breakdown — DONE 2026-07-20
@@ -81,6 +121,12 @@ strike it through or move it to Done.
 - [x] Soak: 2000 frames autoplay = 1 blessing, 9/9 wisps, ~143 fps avg
 - [x] Perf: ~140 fps at 1600x900 with bloom on dev machine; ~200 draws
       typical after culling (GTX 1650 target has headroom)
+- [x] 2026-07-21 normal-mode recorded action tour: all four movement directions,
+      sprint/jump/look, FP/TP, F3, real E interaction, visible Esc pause/resume;
+      all nine spawned wisps collected and camera-forward facing retained
+- [x] 2026-07-21 production shrine recording: central Waystone activated,
+      14/14 wisps collected, one blessing earned, blue shrine treatment reviewed
+- [x] 960x540 launch/screenshot confirms the HUD and world fill the selected size
 
 ## Done
 

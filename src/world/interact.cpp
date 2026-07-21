@@ -6,7 +6,10 @@
 static constexpr float REARM_TIME = 30.0f;      // shrines recharge (playground)
 static constexpr float WISP_MAX_SPEED = 17.0f;
 static constexpr float WISP_COLLECT_DIST = 0.6f;
-static const Color WISP_COLOR = { 140, 245, 215, 255 };
+static const Color WISP_COLORS[] = {
+    { 180, 70, 255, 255 },    // anima: saturated arcane violet
+    { 255, 154, 24, 255 }     // mastery: warm reward gold
+};
 
 float InteractionSystem::Rand01() {
     rngState ^= rngState << 13; rngState ^= rngState >> 17; rngState ^= rngState << 5;
@@ -42,14 +45,20 @@ bool InteractionSystem::Activate(int index, int wispCount) {
     if (index < 0 || index >= (int)items.size()) return false;
     Interactable& it = items[index];
     if (it.rearm > 0.0f) return false;
-    it.rearm = REARM_TIME;
+    it.rearm = it.type == InteractType::HeartShrine ? 3600.0f : REARM_TIME;
     it.glow = 1.0f;
 
+    SpawnReward(it.pos, wispCount);
+    return true;
+}
+
+void InteractionSystem::SpawnReward(Vector3 origin, int wispCount) {
     // Wisps scatter outward first, then home in — anticipation before payout.
     for (int i = 0; i < wispCount; i++) {
         Wisp w;
         w.alive = true;
-        w.pos = it.pos;
+        w.pos = origin;
+        w.color = WISP_COLORS[i % 2];
         float a = Rand01() * PI * 2.0f;
         float e = Rand01() * 1.1f - 0.15f;
         float spd = 3.0f + Rand01() * 3.5f;
@@ -57,7 +66,6 @@ bool InteractionSystem::Activate(int index, int wispCount) {
         w.delay = 0.35f + Rand01() * 0.55f;
         wisps.push_back(w);
     }
-    return true;
 }
 
 InteractEvents InteractionSystem::Update(float dt, Vector3 chest, ParticleSystem& fx) {
@@ -82,7 +90,7 @@ InteractEvents InteractionSystem::Update(float dt, Vector3 chest, ParticleSystem
             if (dist < WISP_COLLECT_DIST) {
                 ev.wispsCollected++;
                 ev.lastCollectPos = w.pos;
-                fx.CollectBurst(w.pos, WISP_COLOR);
+                fx.CollectBurst(w.pos, w.color);
                 wisps[i] = wisps.back();
                 wisps.pop_back();
                 continue;
@@ -98,7 +106,7 @@ InteractEvents InteractionSystem::Update(float dt, Vector3 chest, ParticleSystem
         }
         w.pos = Vector3Add(w.pos, Vector3Scale(w.vel, dt));
         if ((int)(w.age * 30.0f) != (int)((w.age - dt) * 30.0f))   // ~30 Hz trail
-            fx.WispTrail(w.pos, WISP_COLOR);
+            fx.WispTrail(w.pos, w.color);
         i++;
     }
     return ev;
@@ -111,11 +119,38 @@ float InteractionSystem::LightBoost(int lightIndex) const {
 }
 
 void InteractionSystem::DrawWisps(Renderer& r, float time) const {
-    for (const Wisp& w : wisps) {
+    // Alpha-blended bodies keep their hue over green terrain; emissive bloom
+    // and the additive particle trail supply the glow. Pure additive spheres
+    // washed both reward families toward white/green at close range.
+    BeginBlendMode(BLEND_ALPHA);
+    for (size_t i = 0; i < wisps.size(); i++) {
+        const Wisp& w = wisps[i];
         if (!w.alive) continue;
-        float pulse = 0.8f + 0.2f * sinf(time * 9.0f + w.pos.x * 3.0f);
-        Matrix m = MatrixMultiply(MatrixScale(0.22f, 0.22f, 0.22f),
-                                  MatrixTranslate(w.pos.x, w.pos.y, w.pos.z));
-        r.DrawLit(r.sphere, m, ColorMul(WISP_COLOR, pulse), 1.0f);
+        float phase = time * 9.0f + w.pos.x * 3.0f + (float)i * 1.7f;
+        float pulse = 0.72f + 0.28f * sinf(phase);
+
+        // Restrained halo: many rewards overlap during the scatter, so a
+        // smaller translucent shell preserves purple/gold instead of adding
+        // up into a giant white bloom cloud.
+        Color halo = ColorMul(w.color, 0.72f);
+        halo.a = 70;
+        float haloSize = 0.34f + sinf(phase) * 0.045f;
+        Matrix mh = MatrixMultiply(MatrixScale(haloSize, haloSize, haloSize),
+                                   MatrixTranslate(w.pos.x, w.pos.y, w.pos.z));
+        r.DrawLit(r.sphere, mh, halo, 1.0f);
+
+        Matrix core = MatrixMultiply(MatrixScale(0.145f, 0.145f, 0.145f),
+                                     MatrixTranslate(w.pos.x, w.pos.y, w.pos.z));
+        r.DrawLit(r.sphere, core, ColorMul(w.color, 0.82f + pulse * 0.18f), 0.82f);
+
+        // One orbiting spark gives the orb a mystical, handmade PS2-era
+        // silhouette instead of reading as a plain glowing ball.
+        Vector3 spark = { w.pos.x + cosf(phase * 0.7f) * 0.31f,
+                          w.pos.y + sinf(phase * 0.9f) * 0.16f,
+                          w.pos.z + sinf(phase * 0.7f) * 0.31f };
+        Matrix ms = MatrixMultiply(MatrixScale(0.07f, 0.07f, 0.07f),
+                                   MatrixTranslate(spark.x, spark.y, spark.z));
+        r.DrawLit(r.sphere, ms, w.color, 1.0f);
     }
+    EndBlendMode();
 }

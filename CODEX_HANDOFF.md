@@ -6,6 +6,19 @@ Read this file, then GOALS.md, ARCHITECTURE.md, TASKS.md before writing code.
 Keep CODEX_PROGRESS.md as your ledger (create it; one dated entry per work
 session: what was done, what's next, any deviations from this file).
 
+> **2026-07-21 addendum:** `ALBION_PARITY_CHECKLIST.md` is now authoritative
+> for live feature coverage and FP/TP acceptance criteria. This handoff remains
+> authoritative for architecture and epic sequencing. Its older current-state
+> inventory is historical; check `CODEX_PROGRESS.md` and `TASKS.md` for the
+> latest completed foundation work.
+>
+> **Latest movement/visual contract:** the TP body always faces camera-forward
+> (including strafing/backpedaling), locomotion uses a planted root with
+> presentation-only Y smoothing, shrine light/surfaces are blue, XP wisps are
+> violet/gold, and added ground dressing must be living grass/flowers rather
+> than branches, loose stones, or ambient litter. Use `--tour --record-dir` to
+> validate the normal action path, including visible Escape pause/resume.
+
 ---
 
 ## 1. What Zion is (one paragraph)

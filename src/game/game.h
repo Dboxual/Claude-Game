@@ -6,6 +6,7 @@
 #include <string>
 #include "audio/audio.h"
 #include "core/clock.h"
+#include "dev/dev_tools.h"
 #include "fx/particles.h"
 #include "game/menus.h"
 #include "input/input.h"
@@ -17,13 +18,17 @@
 #include "settings/settings.h"
 #include "ui/hud.h"
 #include "ui/ui.h"
+#include "world/day_night.h"
 #include "zone/zone_manager.h"
 
 struct GameLaunchOptions {
     int smokeFrames = 0;         // >0: run N frames then request quit
     std::string screenshotPath;  // captured near the end of a smoke run
     bool autoplay = false;       // scripted movement for soak tests
+    bool inputTour = false;      // recorded movement/look/action validation
     bool thirdPerson = false;    // start in third person (smoke validation)
+    bool devMode = false;        // opt-in creative testing controls
+    float devStartHour = -1.0f;  // --dev --time H: deterministic visual test
     int startZone = -1;          // --zone N: skip title into this zone
 };
 
@@ -50,7 +55,9 @@ private:
 
     void DrawFrame(float dt);
     void DrawUiLayer(float dt);
-    void DrawPlayerBody(Vector3 feet);
+    void DrawContactShadow(Vector3 feet);
+    void DrawHeroModel(Vector3 feet, float dt);
+    void DrawPlayerBody(Vector3 feet);   // primitive fallback if the model is missing
     void DrawDebugOverlay();
 
     App* app = nullptr;
@@ -65,6 +72,8 @@ private:
     PostFx postfx;
     ZoneManager zones;
     ParticleSystem particles;
+    DayNightCycle dayNight;
+    DevTools devTools;
     PlayerController player;
     CameraRig camRig;
     Ui ui;
@@ -72,6 +81,15 @@ private:
     MenuState menuState;
     FixedClock simClock;
     Camera3D camera = {};
+
+    // Original rigged Wayfarer model (assets/models/wayfarer.glb), skeletally
+    // animated; falls back to DrawPlayerBody primitives if the file is absent.
+    Model heroModel = {};
+    ModelAnimation* heroAnims = nullptr;
+    int heroAnimCount = 0;
+    bool heroModelOk = false;
+    float heroAnimTime = 0.0f;
+    Shader heroDefaultShader = {};
 
     SaveData session;
     int currentTarget = -1;
@@ -82,9 +100,27 @@ private:
     bool showDebug = false;
     bool mouseCaptured = false;
     bool wantQuit = false;
+    bool pauseOpenedThisFrame = false;
+    bool devOverlay = true;
+    bool devFly = false;
+    bool devTurbo = false;
+    float playerFacingYaw = 0.0f;
+    float playerStridePhase = 0.0f;
+    float playerVisualSpeed = 0.0f;
+    Vector3 playerVisualPos = {};
     float autoplayJumpTimer = 0.0f;
     float gateCooldown = 0.0f;   // autoplay: don't bounce straight back
     int wispChain = 0;
     float wispChainTimer = 0.0f;
     float titleOrbit = 0.0f;
+    float inputTourTime = 0.0f;
+    bool tourJumped = false;
+    bool tourEnteredFp = false;
+    bool tourReturnedTp = false;
+    bool tourDebugShown = false;
+    bool tourDebugHidden = false;
+    bool tourRewardSpawned = false;
+    bool tourInteractPressed = false;
+    bool tourPauseOpened = false;
+    bool tourPauseResumed = false;
 };

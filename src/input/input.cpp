@@ -40,6 +40,10 @@ void InputSystem::BeginFrame() {
         bool was = down[i];
         // While rebinding, gameplay must not react to the keys being pressed.
         bool now = !capturing && (CodeDown(bindings[i].primary) || CodeDown(bindings[i].secondary));
+        // Escape is a permanent safety/navigation key even if a damaged or
+        // user-edited settings file removes the Pause binding. Rebinding can
+        // add another key, but it may never make the game impossible to exit.
+        if (!capturing && i == (int)Action::Pause && IsKeyDown(KEY_ESCAPE)) now = true;
         if (escLatched && (bindings[i].primary == KEY_ESCAPE ||
                            bindings[i].secondary == KEY_ESCAPE)) now = false;
         down[i] = now;
@@ -61,6 +65,13 @@ Vector2 InputSystem::MoveAxis() const {
 
 Vector2 InputSystem::LookDelta() const {
     return GetMouseDelta();
+}
+
+void InputSystem::InjectTestAction(Action a, bool isDown, bool isPressed) {
+    int i = (int)a;
+    down[i] = isDown;
+    pressed[i] = isPressed;
+    released[i] = false;
 }
 
 void InputSystem::StartCapture(Action a, int slot) {

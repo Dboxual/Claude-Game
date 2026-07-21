@@ -4,6 +4,9 @@
 #pragma once
 #include <string>
 
+// Test/dev runs can isolate settings, saves, and logs without repurposing the
+// process HOME directory or touching a player's real profile.
+void SetUserDataOverride(const std::string& path);
 std::string UserDataDir();                    // created on first call
 std::string SettingsFilePath();               // <data>/settings.json
 std::string SavesDir();                       // <data>/saves (created)

@@ -13,6 +13,7 @@ add_executable(zion
     src/core/app.cpp
     src/core/log.cpp
     src/core/paths.cpp
+    src/dev/dev_tools.cpp
     src/input/input.cpp
     src/settings/settings.cpp
     src/render/lighting.cpp
@@ -22,6 +23,7 @@ add_executable(zion
     src/world/terrain.cpp
     src/world/world.cpp
     src/world/interact.cpp
+    src/world/day_night.cpp
     src/zone/zone_registry.cpp
     src/zone/zone_manager.cpp
     src/player/controller.cpp
@@ -47,5 +49,9 @@ else()
 endif()
 
 if(APPLE)
-    target_link_libraries(zion PRIVATE "-framework IOKit" "-framework Cocoa" "-framework OpenGL")
+    # raylib (vcpkg) needs glfw and the Apple windowing/graphics frameworks
+    # linked explicitly; without glfw the _glfw* symbols are undefined at link.
+    find_package(glfw3 CONFIG REQUIRED)
+    target_link_libraries(zion PRIVATE glfw
+        "-framework IOKit" "-framework Cocoa" "-framework OpenGL" "-framework CoreVideo")
 endif()

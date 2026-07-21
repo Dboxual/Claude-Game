@@ -15,6 +15,6 @@ struct MenuState {
     int settingsTab = 0;      // 0 graphics, 1 audio, 2 controls
 };
 
-TitleAction DrawTitleMenu(Ui& ui, bool hasSave, float time);
+TitleAction DrawTitleMenu(Ui& ui, bool hasSave, const char* zoneName, float time);
 PauseAction DrawPauseMenu(Ui& ui);
 SettingsAction DrawSettingsMenu(Ui& ui, MenuState& ms, Settings& s, InputSystem& input);

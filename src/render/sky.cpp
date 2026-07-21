@@ -75,7 +75,7 @@ void SkyRenderer::Init() {
 void SkyRenderer::Shutdown() {
     UnloadMesh(dome);
     // mat.shader is ours; free the material's default maps but not twice.
-    mat.shader = { 0 };
+    mat.shader = {};
     UnloadMaterial(mat);
     UnloadShader(shader);
 }

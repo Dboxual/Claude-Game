@@ -1,7 +1,13 @@
 build/
+Builds/
 vcpkg_installed/
 *.png
 !docs/*.png
 .vs/
 .cache/
 compile_commands.json
+.DS_Store
+.asset_staging/
+.godot/
+.tools/
+/*.mp4

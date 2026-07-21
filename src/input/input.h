@@ -30,6 +30,11 @@ public:
     Vector2 MoveAxis() const;        // normalized, +y = forward
     Vector2 LookDelta() const;       // raw mouse pixels this frame (pre-sensitivity)
 
+    // Automated recordings exercise the same action handlers as real keys
+    // without requiring macOS Accessibility permission. Never used by normal
+    // gameplay or dev mode.
+    void InjectTestAction(Action a, bool isDown, bool isPressed = false);
+
     // Rebinding: StartCapture, then poll each frame; capture ends when a key
     // is taken (ESC cancels). While active, action states read as released.
     void StartCapture(Action a, int slot);

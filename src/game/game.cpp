@@ -15,9 +15,35 @@ void Game::Init(App& appRef, const GameLaunchOptions& launch) {
     settings.Load(input);
     prevSettings = settings;
     app->SetFpsCap(settings.gfx.fpsCap);
+    if (!settings.gfx.fullscreen)
+        app->SetResolution(settings.gfx.width, settings.gfx.height);
     app->SetFullscreen(settings.gfx.fullscreen);
 
     renderer.Init();
+
+    // Original rigged Wayfarer model + its skeletal clips, rendered through the
+    // scene's lit shader (per-vertex part colors survive as albedo).
+    //
+    // DISABLED: raylib 6.0's LoadModel corrupts the heap while loading our
+    // skinned glTF (deterministic crash on some heap layouts, vanishes under a
+    // debugger -> classic heap overflow). Root cause not yet found; the loader's
+    // bone/color/index allocations all check out, so this needs an ASan run that
+    // can init GL, or a minimal raylib repro. Until then we use the procedural
+    // DrawPlayerBody (arms/legs/cape/walk/shadow). The whole pipeline + the
+    // generator (tools/gen_wayfarer.py) stay in place; flip this to re-enable.
+    const bool kEnableGltfHero = false;
+    if (kEnableGltfHero) {
+        heroModel = LoadModel("assets/models/wayfarer.glb");
+        heroModelOk = heroModel.meshCount > 0;
+        if (heroModelOk) {
+            heroDefaultShader = heroModel.materials[0].shader;
+            for (int i = 0; i < heroModel.materialCount; i++)
+                heroModel.materials[i].shader = renderer.lighting.shader;
+            heroAnims = LoadModelAnimations("assets/models/wayfarer.glb", &heroAnimCount);
+            LOG_INFO("Wayfarer model: %d meshes, %d anims", heroModel.meshCount, heroAnimCount);
+        }
+    }
+
     postfx.Init(settings.gfx.renderScale);
     audio.Init(settings.audio);
     particles.Init();
@@ -30,8 +56,13 @@ void Game::Init(App& appRef, const GameLaunchOptions& launch) {
     zones.LoadZone(firstZone, -1, player, camRig);
     player.Spawn(zones.Current().world.SpawnPos());
     camRig.Init(zones.Current().world.SpawnYaw());
+    playerFacingYaw = camRig.yaw;
+    playerVisualPos = player.pos;
+    if (opts.devMode && opts.devStartHour >= 0.0f)
+        dayNight.SetHour(opts.devStartHour);
+    dayNight.Update(0.0f, zones.CurrentDef().biome, renderer, false);
 
-    if (opts.autoplay || opts.startZone >= 0) {
+    if (opts.autoplay || opts.inputTour || opts.startZone >= 0) {
         StartPlaying(false);     // soak / zone-test runs skip the title
     } else {
         state = GameState::Title;
@@ -44,6 +75,14 @@ void Game::Shutdown() {
     settings.Save(input);
     LOG_INFO("Session end: %.1fs, anima %d, blessings %d, zone %s",
              time, session.anima, session.blessings, zones.CurrentDef().name);
+    if (heroModelOk) {
+        if (heroAnims) UnloadModelAnimations(heroAnims, heroAnimCount);
+        // Restore the model's own shader so UnloadModel doesn't free the shared
+        // lit shader (renderer.Shutdown owns it).
+        for (int i = 0; i < heroModel.materialCount; i++)
+            heroModel.materials[i].shader = heroDefaultShader;
+        UnloadModel(heroModel);
+    }
     ui.Shutdown();
     particles.Shutdown();
     audio.Shutdown();
@@ -75,6 +114,14 @@ void Game::StartPlaying(bool fromSave) {
     }
     state = GameState::Playing;
     simClock = FixedClock{};
+    playerFacingYaw = camRig.yaw;
+    playerStridePhase = 0.0f;
+    playerVisualSpeed = 0.0f;
+    playerVisualPos = player.pos;
+    inputTourTime = 0.0f;
+    tourJumped = tourEnteredFp = tourReturnedTp = false;
+    tourDebugShown = tourDebugHidden = tourRewardSpawned = false;
+    tourInteractPressed = tourPauseOpened = tourPauseResumed = false;
     SetMouseCapture(true);
     hud.StartFadeIn(1.1f);
 }
@@ -98,7 +145,11 @@ void Game::SetMouseCapture(bool on) {
 void Game::ApplySettingsDiffs() {
     GraphicsSettings& g = settings.gfx;
     GraphicsSettings& pg = prevSettings.gfx;
-    if (g.fullscreen != pg.fullscreen) app->SetFullscreen(g.fullscreen);
+    bool fullscreenChanged = g.fullscreen != pg.fullscreen;
+    bool resolutionChanged = g.width != pg.width || g.height != pg.height;
+    if (fullscreenChanged) app->SetFullscreen(g.fullscreen);
+    if (!g.fullscreen && (resolutionChanged || fullscreenChanged))
+        app->SetResolution(g.width, g.height);
     if (g.fpsCap != pg.fpsCap) app->SetFpsCap(g.fpsCap);
     if (g.particleDensity != pg.particleDensity) particles.SetDensity(g.particleDensity);
     AudioSettings& a = settings.audio;
@@ -120,6 +171,55 @@ void Game::Frame(float dt) {
     time += dt;
     smoothDt = ExpDecay(smoothDt, dt, 4.0f, dt);
     input.BeginFrame();
+    pauseOpenedThisFrame = false;
+
+    // Permission-free input tour. These are normal Action states, so the
+    // recording exercises the same gameplay handlers as the bound keys while
+    // remaining independent of opt-in creative/dev mode.
+    if (opts.inputTour) {
+        inputTourTime += dt;
+        if (inputTourTime < 2.5f)       input.InjectTestAction(Action::MoveForward, true);
+        else if (inputTourTime < 5.0f)  input.InjectTestAction(Action::MoveRight, true);
+        else if (inputTourTime < 7.5f)  input.InjectTestAction(Action::MoveBack, true);
+        else if (inputTourTime < 10.0f) input.InjectTestAction(Action::MoveLeft, true);
+        else                            input.InjectTestAction(Action::MoveForward, true);
+        if (inputTourTime >= 13.0f && inputTourTime < 16.0f)
+            input.InjectTestAction(Action::MoveRight, true);
+        if (inputTourTime >= 10.0f && inputTourTime < 13.0f)
+            input.InjectTestAction(Action::Sprint, true);
+
+        if (!tourJumped && inputTourTime >= 10.6f) {
+            input.InjectTestAction(Action::Jump, true, true);
+            tourJumped = true;
+        }
+        if (!tourEnteredFp && inputTourTime >= 12.0f) {
+            input.InjectTestAction(Action::ToggleCamera, true, true);
+            tourEnteredFp = true;
+        }
+        if (!tourReturnedTp && inputTourTime >= 14.0f) {
+            input.InjectTestAction(Action::ToggleCamera, true, true);
+            tourReturnedTp = true;
+        }
+        if (!tourDebugShown && inputTourTime >= 15.0f) {
+            input.InjectTestAction(Action::DebugOverlay, true, true);
+            tourDebugShown = true;
+        }
+        if (!tourDebugHidden && inputTourTime >= 17.0f) {
+            input.InjectTestAction(Action::DebugOverlay, true, true);
+            tourDebugHidden = true;
+        }
+        if (!tourInteractPressed && inputTourTime >= 17.55f) {
+            input.InjectTestAction(Action::Interact, true, true);
+            tourInteractPressed = true;
+        }
+        if (!tourPauseOpened && inputTourTime >= 18.65f) {
+            input.InjectTestAction(Action::Pause, true, true);
+            tourPauseOpened = true;
+        } else if (!tourPauseResumed && inputTourTime >= 19.35f) {
+            input.InjectTestAction(Action::Pause, true, true);
+            tourPauseResumed = true;
+        }
+    }
     audio.Update(dt);
     ui.Begin(dt);
     hud.Update(dt);
@@ -133,6 +233,11 @@ void Game::Frame(float dt) {
             break;
     }
 
+    // Re-apply after zone transitions, whose biome loader establishes the
+    // daytime baseline before this cycle grades it for the current hour.
+    dayNight.Update(dt, zones.CurrentDef().biome, renderer,
+                    state == GameState::Playing);
+
     ApplySettingsDiffs();
     DrawFrame(dt);
 
@@ -143,6 +248,12 @@ void Game::Frame(float dt) {
 // ---- title ----------------------------------------------------------------
 
 void Game::UpdateTitle(float dt) {
+    // Escape is a permanent exit route from the title screen. In gameplay it
+    // opens Pause, where Save & Quit remains available.
+    if (input.Pressed(Action::Pause)) {
+        wantQuit = true;
+        return;
+    }
     titleOrbit += dt * 0.07f;
     float r = 40.0f;
     float base = zones.CurrentDef().temple ? zones.Current().terrain.plateauHeight
@@ -166,11 +277,57 @@ void Game::UpdatePlaying(float dt) {
 
     if (input.Pressed(Action::Pause) && !zones.Transitioning()) {
         state = GameState::Paused;
+        pauseOpenedThisFrame = true;
         SetMouseCapture(false);
         return;
     }
     if (input.Pressed(Action::ToggleCamera)) camRig.ToggleMode();
     if (input.Pressed(Action::DebugOverlay)) showDebug = !showDebug;
+
+    DevCommands dev;
+    if (opts.devMode) {
+        dev = devTools.Poll();
+        if (dev.toggleOverlay) devOverlay = !devOverlay;
+        if (dev.toggleTurbo) devTurbo = !devTurbo;
+        if (dev.advanceTime) {
+            dayNight.AdvanceHours(3.0f);
+            hud.OnBanner("World time advanced by three hours");
+        }
+        if (dev.toggleFly) {
+            devFly = !devFly;
+            player.vel = {};
+            player.posPrev = player.pos;
+            if (!devFly) {
+                Vector3 landed = player.pos;
+                landed.y = zone.world.GroundHeightAt(landed.x, landed.z, 1000.0f);
+                player.Spawn(landed);
+            }
+            hud.OnBanner(devFly ? "Creative flight enabled" : "Creative flight disabled");
+        }
+        if (dev.nextZone) {
+            int next = (zones.CurrentId() + 1) % ZoneCount();
+            zones.LoadZone(next, -1, player, camRig);
+            player.Spawn(zones.Current().world.SpawnPos());
+            camRig.Init(zones.Current().world.SpawnYaw());
+            playerFacingYaw = camRig.yaw;
+            playerStridePhase = 0.0f;
+            playerVisualPos = player.pos;
+            currentTarget = -1;
+            hud.OnBanner(TextFormat("Dev travel: %s", zones.CurrentDef().name));
+        }
+        if (dev.returnToSpawn) {
+            player.Spawn(zone.world.SpawnPos());
+            playerFacingYaw = camRig.yaw;
+            playerStridePhase = 0.0f;
+            playerVisualPos = player.pos;
+            hud.OnBanner("Returned to the zone approach");
+        }
+        if (dev.spawnReward) {
+            Vector3 origin = Vector3Add(player.pos, { 0, 1.2f, 0 });
+            zone.interact.SpawnReward(origin, 18);
+            hud.OnBanner("Dev reward burst (production pickup path)");
+        }
+    }
 
     if (mouseCaptured && !zones.Transitioning())
         camRig.AddLook(input.LookDelta(), settings.controls.mouseSensitivity,
@@ -179,8 +336,36 @@ void Game::UpdatePlaying(float dt) {
     PlayerIntents intents;
     if (!zones.Transitioning()) {
         intents.move = input.MoveAxis();
-        intents.sprintDown = input.Down(Action::Sprint);
+        intents.sprintDown = input.Down(Action::Sprint) || (opts.devMode && devTurbo);
         if (input.Pressed(Action::Jump)) pendingJump = true;
+    }
+
+    if (opts.inputTour && !zones.Transitioning()) {
+        // Mouse-look portion of the Action tour. Locomotion and every button
+        // above flow through InputSystem; only pointer deltas are applied here
+        // because macOS blocks synthetic OS mouse events without permission.
+        if (inputTourTime >= 10.0f && inputTourTime < 13.0f) {
+            camRig.yaw += dt * 0.52f;                             // mouse look
+        } else if (inputTourTime >= 13.0f && inputTourTime < 16.0f) {
+            camRig.yaw -= dt * 0.42f;
+            camRig.pitch = 0.08f + sinf(inputTourTime * 1.7f) * 0.12f;
+        } else if (inputTourTime < 18.65f || inputTourTime >= 19.35f) {
+            camRig.yaw += dt * 0.16f;
+            camRig.pitch = ExpDecay(camRig.pitch, -0.04f, 3.0f, dt);
+        }
+
+        if (!tourRewardSpawned && inputTourTime >= 17.35f) {
+            Vector3 forward = { sinf(camRig.yaw), 0.0f, -cosf(camRig.yaw) };
+            Vector3 rewardOrigin = Vector3Add(player.pos, Vector3Scale(forward, 3.5f));
+            rewardOrigin.y += 1.2f;
+            Interactable rewardTest{};
+            rewardTest.type = InteractType::Wayshrine;
+            rewardTest.pos = rewardOrigin;
+            rewardTest.radius = 5.5f;
+            rewardTest.verb = "Test reward path";
+            zone.interact.Add(rewardTest);
+            tourRewardSpawned = true;
+        }
     }
 
     gateCooldown = fmaxf(gateCooldown - dt, 0.0f);
@@ -227,32 +412,63 @@ void Game::UpdatePlaying(float dt) {
         if (autoplayJumpTimer > 4.0f) { pendingJump = true; autoplayJumpTimer = 0.0f; }
     }
 
-    int steps = simClock.AddFrame(dt);
-    lastSimSteps = steps;
-    for (int i = 0; i < steps; i++) {
-        intents.jumpPressed = pendingJump;
+    if (opts.devMode && devFly) {
+        simClock = FixedClock{};
+        lastSimSteps = 0;
         pendingJump = false;
-        PlayerEvents ev = player.FixedUpdate(intents, camRig.yaw, zone.world);
-        Vector3 feet = player.pos;
-        if (ev.jumped) audio.Play(SoundId::Jump, 0.55f);
-        if (ev.landed) {
-            camRig.OnLand(ev.landSpeed);
-            audio.Play(SoundId::Land, Clamp(ev.landSpeed * 0.1f, 0.3f, 1.0f));
-            particles.LandBurst(feet, ev.landSpeed);
-        }
-        if (ev.footstep) {
-            // Ground material varies the step: rock rings tighter/higher.
-            GroundKind kind = zone.terrain.KindAt(feet.x, feet.z);
-            float pitch = kind == GroundKind::Rock ? 1.3f
-                        : kind == GroundKind::Dry ? 1.12f : 1.0f;
-            float vol = (player.sprinting ? 0.6f : 0.4f) *
-                        (kind == GroundKind::Rock ? 0.8f : 1.0f);
-            audio.Play(SoundId::Footstep, vol, pitch);
-            particles.FootstepPuff(feet, player.vel);
+        Vector3 fw = { sinf(camRig.yaw), 0, -cosf(camRig.yaw) };
+        Vector3 rt = { cosf(camRig.yaw), 0, sinf(camRig.yaw) };
+        Vector3 wish = Vector3Add(Vector3Scale(fw, intents.move.y),
+                                  Vector3Scale(rt, intents.move.x));
+        wish.y = dev.vertical;
+        if (Vector3LengthSqr(wish) > 1.0f) wish = Vector3Normalize(wish);
+        float flySpeed = devTurbo ? 30.0f : 12.0f;
+        player.posPrev = player.pos;
+        player.vel = Vector3Scale(wish, flySpeed);
+        player.pos = Vector3Add(player.pos, Vector3Scale(player.vel, dt));
+        player.posPrev = player.pos; // creative flight is a frame-rate test tool
+        player.grounded = false;
+    } else {
+        int steps = simClock.AddFrame(dt);
+        lastSimSteps = steps;
+        for (int i = 0; i < steps; i++) {
+            intents.jumpPressed = pendingJump;
+            pendingJump = false;
+            PlayerEvents ev = player.FixedUpdate(intents, camRig.yaw, zone.world);
+            Vector3 feet = player.pos;
+            // Movement sounds (jump/land/footstep) intentionally muted; visual
+            // feedback (camera dip, dust) is kept.
+            if (ev.landed) {
+                camRig.OnLand(ev.landSpeed);
+                particles.LandBurst(feet, ev.landSpeed);
+            }
+            if (ev.footstep) {
+                particles.FootstepPuff(feet, player.vel);
+            }
         }
     }
 
-    camera = camRig.Update(dt, player.InterpPos(simClock.Alpha()), player.vel,
+    // Third-person body orientation follows camera yaw exactly. Strafing and
+    // backing up never turn the character away from the first-person forward
+    // direction; this is the authored control rule, not a locomotion heuristic.
+    float speed = player.SpeedXZ();
+    playerFacingYaw = camRig.yaw;
+    playerVisualSpeed = ExpDecay(playerVisualSpeed,
+        player.grounded ? speed : 0.0f, 12.0f, dt);
+    if (playerVisualSpeed > 0.12f)
+        playerStridePhase += playerVisualSpeed * dt * (2.0f * PI / 2.15f);
+
+    // Smooth only presentation Y to absorb tiny heightfield/fixed-tick steps.
+    // X/Z stay fully interpolated and responsive. Large changes are teleports.
+    Vector3 simFeet = player.InterpPos(simClock.Alpha());
+    playerVisualPos.x = simFeet.x;
+    playerVisualPos.z = simFeet.z;
+    if (fabsf(simFeet.y - playerVisualPos.y) > 2.0f)
+        playerVisualPos.y = simFeet.y;
+    else
+        playerVisualPos.y = ExpDecay(playerVisualPos.y, simFeet.y, 30.0f, dt);
+
+    camera = camRig.Update(dt, playerVisualPos, player.vel,
                            player.grounded, player.sprinting, zone.world,
                            settings.gfx.fovY);
 
@@ -276,17 +492,20 @@ void Game::UpdatePlaying(float dt) {
                 if (zone.interact.Activate(currentTarget, heart ? 14 : 9)) {
                     audio.Play(SoundId::ShrineChime, 0.9f, 1.0f, false);
                     if (heart) audio.Play(SoundId::Blessing, 0.9f, 1.0f, false);
-                    particles.ShrineBurst(it.pos, Color{ 120, 245, 210, 255 });
-                    session.blessings++;
-                    hud.OnBanner(heart ? "The Heart of the Vale stirs"
-                                       : "The wayshrine acknowledges you");
-                    SaveNow();
+                    particles.ShrineBurst(it.pos, Color{ 76, 170, 255, 255 });
+                    if (heart) {
+                        session.blessings++;
+                        hud.OnBanner("Waystone attuned - journey anchored");
+                        SaveNow();
+                    } else {
+                        hud.OnBanner("Anima drawn from the echo well");
+                    }
                 }
             }
         }
     }
 
-    Vector3 chest = Vector3Add(player.InterpPos(simClock.Alpha()), { 0, 1.1f, 0 });
+    Vector3 chest = Vector3Add(playerVisualPos, { 0, 1.1f, 0 });
     InteractEvents ev = zone.interact.Update(dt, chest, particles);
     wispChainTimer = fmaxf(wispChainTimer - dt, 0.0f);
     if (wispChainTimer <= 0.0f) wispChain = 0;
@@ -298,7 +517,14 @@ void Game::UpdatePlaying(float dt) {
         hud.OnAnimaGained();
     }
 
+    int previousZone = zones.CurrentId();
     zones.Update(dt, player, camRig);
+    if (zones.CurrentId() != previousZone) {
+        playerFacingYaw = camRig.yaw;
+        playerStridePhase = 0.0f;
+        playerVisualSpeed = 0.0f;
+        playerVisualPos = player.pos;
+    }
     particles.Update(dt);
     particles.AmbientMotes(player.pos, dt);
 }
@@ -338,7 +564,12 @@ void Game::DrawFrame(float dt) {
     zone.interact.DrawWisps(renderer, time);
 
     bool showBody = (state == GameState::Title) || camRig.TpVisibility() > 0.25f;
-    if (showBody) DrawPlayerBody(player.InterpPos(simClock.Alpha()));
+    if (showBody) {
+        Vector3 feet = playerVisualPos;
+        DrawContactShadow(feet);
+        if (heroModelOk) DrawHeroModel(feet, dt);
+        else DrawPlayerBody(feet);
+    }
 
     particles.Draw(camera);
     renderer.stats.particles = particles.AliveCount();
@@ -365,8 +596,17 @@ void Game::DrawUiLayer(float) {
     hp.firstPerson = (camRig.Mode() == CameraView::FirstPerson) &&
                      camRig.TpVisibility() < 0.5f;
     hp.menuOpen = (state != GameState::Playing);
+    hp.zoneName = zones.CurrentDef().name;
+    hp.zoneTier = zones.CurrentDef().tier;
+    hp.cameraYaw = camRig.yaw;
+    hp.clockText = dayNight.ClockText();
+    hp.showControlHints = session.playtime < 18.0f;
     hp.anima = session.anima;
     hp.blessings = session.blessings;
+    hp.devMode = opts.devMode;
+    hp.devOverlay = devOverlay;
+    hp.devFly = devFly;
+    hp.devTurbo = devTurbo;
     if (state == GameState::Playing && currentTarget >= 0) {
         const Interactable& it = zone.interact.Items()[currentTarget];
         hp.promptVerb = it.rearm > 0.0f ? "Resting..." : it.verb.c_str();
@@ -376,7 +616,8 @@ void Game::DrawUiLayer(float) {
 
     switch (state) {
         case GameState::Title: {
-            TitleAction a = DrawTitleMenu(ui, SaveSystem::Exists(SAVE_SLOT), time);
+            TitleAction a = DrawTitleMenu(ui, SaveSystem::Exists(SAVE_SLOT),
+                                          zones.CurrentDef().name, time);
             if (a == TitleAction::Continue) StartPlaying(true);
             if (a == TitleAction::NewJourney) StartPlaying(false);
             if (a == TitleAction::Settings) { settingsReturn = GameState::Title; state = GameState::SettingsMenu; }
@@ -385,7 +626,8 @@ void Game::DrawUiLayer(float) {
         }
         case GameState::Paused: {
             PauseAction a = DrawPauseMenu(ui);
-            if (a == PauseAction::None && input.Pressed(Action::Pause)) a = PauseAction::Resume;
+            if (a == PauseAction::None && input.Pressed(Action::Pause) &&
+                !pauseOpenedThisFrame) a = PauseAction::Resume;
             if (a == PauseAction::Resume) { state = GameState::Playing; SetMouseCapture(true); }
             if (a == PauseAction::Settings) { settingsReturn = GameState::Paused; state = GameState::SettingsMenu; }
             if (a == PauseAction::SaveAndTitle) { SaveNow(); state = GameState::Title; SetMouseCapture(false); }
@@ -408,34 +650,150 @@ void Game::DrawUiLayer(float) {
     }
 }
 
-// Placeholder wanderer: hooded robe from primitives, with a light
-// procedural walk lean (the animation framework grows from here).
-void Game::DrawPlayerBody(Vector3 feet) {
-    const Color robe = { 52, 96, 104, 255 };
-    const Color robeDark = { 40, 74, 82, 255 };
-    const Color sash = { 214, 178, 96, 255 };
-    const Color skin = { 224, 188, 152, 255 };
-    float yaw = camRig.yaw;
+// Soft, alpha-blended contact shadow that grounds the character on the terrain.
+// Drawn before the body/model so opaque parts occlude it; fades while airborne.
+void Game::DrawContactShadow(Vector3 feet) {
+    float air = player.grounded ? 1.0f : 0.55f;
+    float r = 0.52f * air;
+    Vector3 s0 = { feet.x, feet.y + 0.03f, feet.z };
+    Vector3 s1 = { feet.x, feet.y + 0.05f, feet.z };
+    BeginBlendMode(BLEND_ALPHA);
+    DrawCylinderEx(s0, s1, r, r, 20, Color{ 12, 20, 14, (unsigned char)(120 * air) });
+    DrawCylinderEx(s0, s1, r * 0.6f, r * 0.6f, 18, Color{ 8, 14, 10, (unsigned char)(90 * air) });
+    EndBlendMode();
+}
 
-    // Lean into horizontal velocity; a touch of bounce while striding.
+// Draw the rigged Wayfarer model: pick Walk/Idle by movement, advance the clip,
+// CPU-skin it, and render through the scene's lit shader facing travel.
+void Game::DrawHeroModel(Vector3 feet, float dt) {
+    // Both authored character bodies use +Z as their front. raylib's +Y matrix
+    // rotation has the opposite yaw sign to CameraRig, so this adapter must
+    // invert the camera angle as well as apply the half-turn. At every yaw the
+    // body's forward axis now exactly equals CameraRig::Forward() projected XZ.
+    float renderYaw = PI - playerFacingYaw;
+    if (heroAnimCount <= 0 || !heroAnims) {   // safety: draw static bind pose
+        renderer.SetEmissive(0.0f);
+        DrawModelEx(heroModel, feet, Vector3{ 0, 1, 0 }, renderYaw * RAD2DEG,
+                    Vector3{ 1, 1, 1 }, WHITE);
+        return;
+    }
     float speed = player.SpeedXZ();
-    float lean = Clamp(speed * 0.022f, 0.0f, 0.16f);
-    float bounce = player.grounded && speed > 0.8f
-                       ? fabsf(sinf(time * speed * 2.9f)) * 0.05f : 0.0f;
+    bool moving = player.grounded && speed > 0.6f;
+    float dur = moving ? 1.0f : 2.6f;
+    int idx = (!moving && heroAnimCount > 1) ? 1 : 0;
+    for (int i = 0; i < heroAnimCount; i++)
+        if (TextIsEqual(heroAnims[i].name, moving ? "Walk" : "Idle")) { idx = i; break; }
 
+    heroAnimTime += dt;
+    const ModelAnimation& a = heroAnims[idx];
+    int frame = a.keyframeCount > 0
+        ? (int)(fmodf(heroAnimTime, dur) / dur * a.keyframeCount) % a.keyframeCount : 0;
+    UpdateModelAnimation(heroModel, a, frame);
+
+    renderer.SetEmissive(0.0f);
+    DrawModelEx(heroModel, feet, Vector3{ 0, 1, 0 }, renderYaw * RAD2DEG,
+                Vector3{ 1, 1, 1 }, WHITE);
+}
+
+// Chunky low-poly adventurer built from the primitive kit: hooded head with
+// a face band, tunic with a vest and bronze pauldrons, swinging arms/legs with
+// boots, a mythic cape and glowing gem, and a sheathed blade. A speed-driven
+// walk cycle animates the limbs. Seed of the future animation framework.
+void Game::DrawPlayerBody(Vector3 feet) {
+    // Palette: teal cloth identity, warm leather, bronze metal, mythic accents.
+    const Color pants    = { 44, 52, 60, 255 };
+    const Color leather  = { 92, 62, 42, 255 };
+    const Color cloth    = { 50, 98, 106, 255 };
+    const Color pauldron = { 170, 128, 72, 255 };
+    const Color skin     = { 226, 178, 140, 255 };
+    const Color hood     = { 58, 50, 70, 255 };
+    const Color faceBand = { 30, 36, 44, 255 };
+    const Color cape     = { 74, 60, 92, 255 };
+    const Color blade    = { 150, 220, 214, 255 };
+    const Color gem      = { 120, 235, 220, 255 };
+
+    float yaw = PI - playerFacingYaw;
+    float speed = playerVisualSpeed;
+    bool moving = player.grounded && speed > 0.6f;
+
+    // Stride phase comes from actual distance traveled. The root stays planted;
+    // only articulated parts move, eliminating the previous vertical jitter.
+    float phase = sinf(playerStridePhase);
+    float swingAmt = moving ? Clamp(speed * 0.10f, 0.2f, 0.75f) : 0.0f;
+    float legSwing = phase * swingAmt;
+    float armSwing = moving ? -phase * swingAmt * 0.85f : sinf(time * 1.6f) * 0.05f;
+    float lean = Clamp(speed * 0.02f, 0.0f, 0.14f);
+    float bounce = 0.0f;
+    float capePitch = -0.14f - speed * 0.04f
+                      + (moving ? sinf(playerStridePhase * 1.1f) * 0.045f
+                                : sinf(time * 1.6f) * 0.02f);
+
+    // Body-local frame -> lean (X) then facing (Y).
     Matrix rot = MatrixMultiply(MatrixRotateX(lean), MatrixRotateY(yaw));
-    auto put = [&](const Mesh& mesh, Vector3 off, Vector3 scl, Color c) {
-        Matrix m = MatrixMultiply(MatrixScale(scl.x, scl.y, scl.z), rot);
-        Vector3 o = Vector3RotateByAxisAngle(off, { 0, 1, 0 }, yaw);
-        m = MatrixMultiply(m, MatrixTranslate(feet.x + o.x, feet.y + o.y + bounce, feet.z + o.z));
-        renderer.DrawLit(mesh, m, c);
+
+    // Draw a part centered at `center` (body-local), rotated by pitch/roll about
+    // `pivot` (a joint), then oriented by the body and planted at the feet.
+    auto part = [&](const Mesh& mesh, Vector3 center, Vector3 scl, Color c,
+                    float pitch, float roll, Vector3 pivot, float emis) {
+        Matrix m = MatrixScale(scl.x, scl.y, scl.z);
+        m = MatrixMultiply(m, MatrixTranslate(center.x - pivot.x, center.y - pivot.y, center.z - pivot.z));
+        m = MatrixMultiply(m, MatrixMultiply(MatrixRotateX(pitch), MatrixRotateZ(roll)));
+        m = MatrixMultiply(m, MatrixTranslate(pivot.x, pivot.y, pivot.z));
+        m = MatrixMultiply(m, rot);
+        m = MatrixMultiply(m, MatrixTranslate(feet.x, feet.y + bounce, feet.z));
+        renderer.DrawLit(mesh, m, c, emis);
+    };
+    auto put = [&](const Mesh& mesh, Vector3 center, Vector3 scl, Color c) {
+        part(mesh, center, scl, c, 0.0f, 0.0f, center, 0.0f);
     };
 
-    put(renderer.cone, { 0, 0, 0 }, { 0.85f, 1.15f, 0.85f }, robeDark);
-    put(renderer.cylinder, { 0, 0.9f, 0 }, { 0.62f, 0.55f, 0.62f }, robe);
-    put(renderer.cube, { 0, 1.18f, 0 }, { 0.58f, 0.12f, 0.5f }, sash);
-    put(renderer.sphere, { 0, 1.58f, 0 }, { 0.34f, 0.36f, 0.34f }, skin);
-    put(renderer.cone, { 0, 1.52f, -0.02f }, { 0.5f, 0.5f, 0.5f }, robe);
+    // Legs + boots (swing about the hips, left/right opposed).
+    for (int s = -1; s <= 1; s += 2) {
+        Vector3 hip = { 0.13f * s, 0.84f, 0.0f };
+        float sw = legSwing * s;
+        part(renderer.cube, { 0.13f * s, 0.44f, 0.0f }, { 0.17f, 0.82f, 0.21f }, pants, sw, 0.0f, hip, 0.0f);
+        part(renderer.cube, { 0.13f * s, 0.07f, 0.05f }, { 0.2f, 0.14f, 0.32f }, leather, sw, 0.0f, hip, 0.0f);
+    }
+
+    // Hips / belt, tunic torso (slightly slimmer + taller), chest vest, gem.
+    const Color glove = { 74, 52, 36, 255 };
+    put(renderer.cube, { 0, 0.9f, 0 }, { 0.42f, 0.22f, 0.3f }, leather);
+    put(renderer.cube, { 0, 1.24f, 0 }, { 0.46f, 0.56f, 0.3f }, cloth);
+    put(renderer.cube, { 0, 1.26f, 0.15f }, { 0.34f, 0.4f, 0.06f }, leather);
+    put(renderer.sphere, { 0, 1.3f, 0.19f }, { 0.09f, 0.09f, 0.07f }, gem);
+    part(renderer.sphere, { 0, 1.3f, 0.19f }, { 0.09f, 0.09f, 0.07f }, gem, 0, 0, { 0, 1.3f, 0.19f }, 0.9f);
+
+    // Pauldrons.
+    for (int s = -1; s <= 1; s += 2)
+        put(renderer.cube, { 0.29f * s, 1.48f, 0 }, { 0.22f, 0.16f, 0.3f }, pauldron);
+
+    // Arms: cloth upper + leather bracer forearm + glove, splayed slightly
+    // outward and swinging about the shoulders opposite the legs.
+    for (int s = -1; s <= 1; s += 2) {
+        Vector3 shoulder = { 0.30f * s, 1.48f, 0.0f };
+        float sw = armSwing * s;
+        float splay = 0.13f * s;
+        part(renderer.cube, { 0.30f * s, 1.18f, 0.0f }, { 0.13f, 0.44f, 0.15f }, cloth, sw, splay, shoulder, 0.0f);
+        part(renderer.cube, { 0.30f * s, 0.82f, 0.02f }, { 0.14f, 0.42f, 0.16f }, leather, sw, splay, shoulder, 0.0f);
+        part(renderer.cube, { 0.30f * s, 0.6f, 0.03f }, { 0.14f, 0.16f, 0.16f }, glove, sw, splay, shoulder, 0.0f);
+    }
+
+    // Neck, head, face band, and a proper hood/cowl (no witch-hat point).
+    put(renderer.cube, { 0, 1.56f, 0 }, { 0.15f, 0.13f, 0.15f }, skin);
+    put(renderer.sphere, { 0, 1.7f, 0 }, { 0.33f, 0.37f, 0.33f }, skin);
+    put(renderer.cube, { 0, 1.7f, 0.15f }, { 0.2f, 0.1f, 0.06f }, faceBand);
+    put(renderer.sphere, { 0, 1.75f, -0.05f }, { 0.42f, 0.4f, 0.46f }, hood);
+    put(renderer.cube, { 0, 1.84f, 0.05f }, { 0.34f, 0.1f, 0.3f }, hood);   // brim shading the face
+    put(renderer.cube, { 0, 1.6f, 0.0f }, { 0.44f, 0.16f, 0.44f }, hood);   // cowl over the shoulders
+
+    // Cape flowing from the shoulders.
+    part(renderer.cube, { 0, 1.1f, -0.22f }, { 0.5f, 0.9f, 0.05f }, cape,
+         capePitch, 0.0f, { 0, 1.52f, -0.2f }, 0.0f);
+
+    // Sheathed blade slung across the back (glowing edge = mythic identity).
+    part(renderer.cube, { -0.12f, 1.2f, -0.26f }, { 0.06f, 0.92f, 0.03f }, blade, 0.0f, 0.5f, { -0.12f, 1.2f, -0.26f }, 0.35f);
+    part(renderer.cube, { 0.05f, 0.86f, -0.26f }, { 0.28f, 0.07f, 0.09f }, pauldron, 0.0f, 0.5f, { 0.05f, 0.86f, -0.26f }, 0.0f);
+    part(renderer.cube, { 0.12f, 0.74f, -0.26f }, { 0.06f, 0.2f, 0.07f }, leather, 0.0f, 0.5f, { 0.12f, 0.74f, -0.26f }, 0.0f);
 }
 
 void Game::DrawDebugOverlay() {

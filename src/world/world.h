@@ -15,7 +15,7 @@ class Renderer;
 
 enum class PropType {
     Column, BrokenColumn, Monolith, StandingStone,
-    Tree, Rock, Shrine, Altar, Gate,
+    Tree, Rock, GrassPatch, Shrine, Altar, Gate,
 };
 
 struct Prop {
