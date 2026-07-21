@@ -27,6 +27,8 @@ private:
     Shader compositeShader = {};
     int locBlurDir = 0;
     int locBloomStrength = 0;
+    int locBloomTexture = 0;
     int width = 0, height = 0;
     float scale = 1.0f;
+    float lastBloomStrength = -1.0f;
 };

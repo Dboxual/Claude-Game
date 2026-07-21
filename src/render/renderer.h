@@ -11,6 +11,7 @@ struct RenderStats {
     int culledChunks = 0;
     int culledProps = 0;
     int particles = 0;
+    int pointLights = 0;
 };
 
 // Six inward-facing planes (xyz = normal, w = distance term).

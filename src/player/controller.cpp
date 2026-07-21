@@ -15,6 +15,7 @@ static constexpr float COYOTE_TIME = 0.12f;
 static constexpr float JUMP_BUFFER = 0.12f;
 static constexpr float GROUND_SNAP = 0.45f;        // max step-down before airborne
 static constexpr float STEP_UP = 0.55f;            // max ledge auto-step
+static constexpr float MIN_WALKABLE_NORMAL_Y = 0.64f; // about a 50-degree slope
 static constexpr float STRIDE_LENGTH = 2.15f;      // meters between footsteps
 
 void PlayerController::Spawn(Vector3 feetPos) {
@@ -58,10 +59,28 @@ PlayerEvents PlayerController::FixedUpdate(const PlayerIntents& in, float camYaw
     if (!grounded) vel.y = fmaxf(vel.y - GRAVITY * dt, -TERMINAL_FALL);
 
     pos = Vector3Add(pos, Vector3Scale(vel, dt));
-    pos = world.ResolveCollisions(pos, RADIUS, HEIGHT);
+    pos = world.ResolveCollisions(pos, RADIUS, HEIGHT, &vel);
 
     float ground = world.GroundHeightAt(pos.x, pos.z, posPrev.y);
     if (grounded) {
+        Vector3 normal = world.GroundNormalAt(pos.x, pos.z, posPrev.y);
+        if (normal.y < MIN_WALKABLE_NORMAL_Y && ground > posPrev.y) {
+            Vector2 uphill = Vector2Normalize({ -normal.x, -normal.z });
+            Vector2 moved = { pos.x - posPrev.x, pos.z - posPrev.z };
+            float uphillMove = Vector2DotProduct(moved, uphill);
+            if (uphillMove > 0.0f) {
+                pos.x -= uphill.x * uphillMove;
+                pos.z -= uphill.y * uphillMove;
+                float uphillSpeed = vel.x * uphill.x + vel.z * uphill.y;
+                if (uphillSpeed > 0.0f) {
+                    vel.x -= uphill.x * uphillSpeed;
+                    vel.z -= uphill.y * uphillSpeed;
+                }
+                pos = world.ResolveCollisions(pos, RADIUS, HEIGHT, &vel);
+                ground = world.GroundHeightAt(pos.x, pos.z, posPrev.y);
+            }
+        }
+
         float dy = ground - pos.y;
         if (dy >= -GROUND_SNAP && dy <= STEP_UP) {
             pos.y = ground;              // follow slopes and small steps
@@ -73,6 +92,8 @@ PlayerEvents PlayerController::FixedUpdate(const PlayerIntents& in, float camYaw
             pos.x = posPrev.x;
             pos.z = posPrev.z;
             pos.y = world.GroundHeightAt(pos.x, pos.z, posPrev.y);
+            vel.x = 0.0f;
+            vel.z = 0.0f;
         }
     } else if (vel.y <= 0.0f && pos.y <= ground) {
         ev.landed = true;
@@ -83,8 +104,10 @@ PlayerEvents PlayerController::FixedUpdate(const PlayerIntents& in, float camYaw
     }
 
     // Footstep cadence from actual distance covered.
-    if (grounded && SpeedXZ() > 1.0f) {
-        strideAccum += SpeedXZ() * dt;
+    float movedX = pos.x - posPrev.x, movedZ = pos.z - posPrev.z;
+    float movedXZ = sqrtf(movedX * movedX + movedZ * movedZ);
+    if (grounded && movedXZ > dt) {
+        strideAccum += movedXZ;
         if (strideAccum >= STRIDE_LENGTH) {
             strideAccum -= STRIDE_LENGTH;
             ev.footstep = true;

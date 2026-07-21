@@ -80,13 +80,30 @@ void SkyRenderer::Shutdown() {
     UnloadShader(shader);
 }
 
+static bool Same(Vector3 a, Vector3 b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
 void SkyRenderer::Draw(const Camera3D& cam, Vector3 sunDir, float time) {
-    Vector3 sd = Vector3Normalize(sunDir);
-    SetShaderValue(shader, locSunDir, &sd, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locZenith, &zenithColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locHorizon, &horizonColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locSunColor, &sunColor, SHADER_UNIFORM_VEC3);
+    if (!uniformCacheValid || !Same(sunDir, cachedSunDir)) {
+        Vector3 normalized = Vector3Normalize(sunDir);
+        SetShaderValue(shader, locSunDir, &normalized, SHADER_UNIFORM_VEC3);
+        cachedSunDir = sunDir;
+    }
+    if (!uniformCacheValid || !Same(zenithColor, cachedZenith)) {
+        SetShaderValue(shader, locZenith, &zenithColor, SHADER_UNIFORM_VEC3);
+        cachedZenith = zenithColor;
+    }
+    if (!uniformCacheValid || !Same(horizonColor, cachedHorizon)) {
+        SetShaderValue(shader, locHorizon, &horizonColor, SHADER_UNIFORM_VEC3);
+        cachedHorizon = horizonColor;
+    }
+    if (!uniformCacheValid || !Same(sunColor, cachedSunColor)) {
+        SetShaderValue(shader, locSunColor, &sunColor, SHADER_UNIFORM_VEC3);
+        cachedSunColor = sunColor;
+    }
     SetShaderValue(shader, locTime, &time, SHADER_UNIFORM_FLOAT);
+    uniformCacheValid = true;
 
     // Dome radius must sit inside the far clip plane (raylib default 1000).
     Matrix xf = MatrixMultiply(MatrixScale(800, 800, 800),

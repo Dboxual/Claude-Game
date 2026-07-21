@@ -98,19 +98,50 @@ void LightingSystem::Shutdown() {
     UnloadShader(shader);
 }
 
+static bool Same(Vector3 a, Vector3 b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
 void LightingSystem::SetFrame(Vector3 cameraPos) {
-    Vector3 sd = Vector3Normalize(sunDir);
-    SetShaderValue(shader, locSunDir, &sd, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locSunColor, &sunColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locSkyAmb, &skyAmbient, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locGroundAmb, &groundAmbient, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locFogColor, &fogColor, SHADER_UNIFORM_VEC3);
-    SetShaderValue(shader, locFogDensity, &fogDensity, SHADER_UNIFORM_FLOAT);
+    if (!frameCacheValid || !Same(sunDir, cachedSunDir)) {
+        Vector3 normalized = Vector3Normalize(sunDir);
+        SetShaderValue(shader, locSunDir, &normalized, SHADER_UNIFORM_VEC3);
+        cachedSunDir = sunDir;
+    }
+    if (!frameCacheValid || !Same(sunColor, cachedSunColor)) {
+        SetShaderValue(shader, locSunColor, &sunColor, SHADER_UNIFORM_VEC3);
+        cachedSunColor = sunColor;
+    }
+    if (!frameCacheValid || !Same(skyAmbient, cachedSkyAmbient)) {
+        SetShaderValue(shader, locSkyAmb, &skyAmbient, SHADER_UNIFORM_VEC3);
+        cachedSkyAmbient = skyAmbient;
+    }
+    if (!frameCacheValid || !Same(groundAmbient, cachedGroundAmbient)) {
+        SetShaderValue(shader, locGroundAmb, &groundAmbient, SHADER_UNIFORM_VEC3);
+        cachedGroundAmbient = groundAmbient;
+    }
+    if (!frameCacheValid || !Same(fogColor, cachedFogColor)) {
+        SetShaderValue(shader, locFogColor, &fogColor, SHADER_UNIFORM_VEC3);
+        cachedFogColor = fogColor;
+    }
+    if (!frameCacheValid || fogDensity != cachedFogDensity) {
+        SetShaderValue(shader, locFogDensity, &fogDensity, SHADER_UNIFORM_FLOAT);
+        cachedFogDensity = fogDensity;
+    }
     SetShaderValue(shader, locCamPos, &cameraPos, SHADER_UNIFORM_VEC3);
+    frameCacheValid = true;
 }
 
 void LightingSystem::SetPointLights(const PointLight* lights, int count) {
     if (count > MAX_POINT_LIGHTS) count = MAX_POINT_LIGHTS;
+    bool unchanged = count == cachedLightCount;
+    for (int i = 0; unchanged && i < count; i++) {
+        unchanged = Same(lights[i].pos, cachedLights[i].pos) &&
+                    Same(lights[i].color, cachedLights[i].color) &&
+                    lights[i].range == cachedLights[i].range;
+    }
+    if (unchanged) return;
+
     Vector3 pos[MAX_POINT_LIGHTS];
     Vector3 col[MAX_POINT_LIGHTS];
     float range[MAX_POINT_LIGHTS];
@@ -118,6 +149,7 @@ void LightingSystem::SetPointLights(const PointLight* lights, int count) {
         pos[i] = lights[i].pos;
         col[i] = lights[i].color;
         range[i] = lights[i].range;
+        cachedLights[i] = lights[i];
     }
     SetShaderValue(shader, locLightCount, &count, SHADER_UNIFORM_INT);
     if (count > 0) {
@@ -125,6 +157,7 @@ void LightingSystem::SetPointLights(const PointLight* lights, int count) {
         SetShaderValueV(shader, locLightColor, col, SHADER_UNIFORM_VEC3, count);
         SetShaderValueV(shader, locLightRange, range, SHADER_UNIFORM_FLOAT, count);
     }
+    cachedLightCount = count;
 }
 
 void LightingSystem::SetEmissive(float e) {

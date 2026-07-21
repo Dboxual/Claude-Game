@@ -22,6 +22,8 @@ add_executable(zion
     src/world/terrain.cpp
     src/world/world.cpp
     src/world/interact.cpp
+    src/zone/zone_registry.cpp
+    src/zone/zone_manager.cpp
     src/player/controller.cpp
     src/player/camera_rig.cpp
     src/fx/particles.cpp

@@ -46,7 +46,8 @@ uniform float bloomStrength;
 out vec4 finalColor;
 void main() {
     vec3 c = texture(texture0, fragTexCoord).rgb;
-    c += texture(bloomTex, fragTexCoord).rgb * bloomStrength;
+    if (bloomStrength > 0.0)
+        c += texture(bloomTex, fragTexCoord).rgb * bloomStrength;
 
     // Grade: gentle contrast S-curve, saturation lift, warm tilt — the
     // PS2-fantasy "storybook" finish.
@@ -71,6 +72,7 @@ void PostFx::Init(float renderScale) {
         LOG_ERROR("PostFx shader failed to compile");
     locBlurDir = GetShaderLocation(blurShader, "blurDir");
     locBloomStrength = GetShaderLocation(compositeShader, "bloomStrength");
+    locBloomTexture = GetShaderLocation(compositeShader, "bloomTex");
     EnsureTargets(renderScale);
 }
 
@@ -143,10 +145,13 @@ void PostFx::Composite(bool bloomEnabled) {
         Pass(blurB, blurA.texture, blurShader);
     }
 
-    SetShaderValue(compositeShader, locBloomStrength, &strength, SHADER_UNIFORM_FLOAT);
-    int bloomSlot = GetShaderLocation(compositeShader, "bloomTex");
+    if (strength != lastBloomStrength) {
+        SetShaderValue(compositeShader, locBloomStrength, &strength, SHADER_UNIFORM_FLOAT);
+        lastBloomStrength = strength;
+    }
     BeginShaderMode(compositeShader);
-    SetShaderValueTexture(compositeShader, bloomSlot, blurB.texture);
+    if (bloomEnabled)
+        SetShaderValueTexture(compositeShader, locBloomTexture, blurB.texture);
     DrawTexturePro(scene.texture, { 0, 0, (float)width, (float)-height },
                    { 0, 0, (float)GetScreenWidth(), (float)GetScreenHeight() },
                    { 0, 0 }, 0, WHITE);

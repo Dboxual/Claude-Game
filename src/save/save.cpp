@@ -29,6 +29,7 @@ SaveData Load(int slot) {
         d.anima = j.value("anima", 0);
         d.blessings = j.value("blessings", 0);
         d.playtime = j.value("playtime", 0.0f);
+        d.currentZone = j.value("zone", d.currentZone);
         d.valid = true;
         LOG_INFO("Loaded save slot %d (%.0f min played)", slot, d.playtime / 60.0f);
     } catch (const std::exception& e) {
@@ -42,6 +43,7 @@ bool Write(int slot, const SaveData& d) {
         { "px", d.playerPos.x }, { "py", d.playerPos.y }, { "pz", d.playerPos.z },
         { "yaw", d.yaw }, { "pitch", d.pitch }, { "camera", d.cameraMode },
         { "anima", d.anima }, { "blessings", d.blessings }, { "playtime", d.playtime },
+        { "zone", d.currentZone },
     };
     std::ofstream f(SaveSlotPath(slot));
     if (!f.is_open()) { LOG_ERROR("Cannot write save slot %d", slot); return false; }

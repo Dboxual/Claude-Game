@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
         else if (a == "--fullscreen") cfg.fullscreen = true;
         else if (a == "--autoplay")   launch.autoplay = true;
         else if (a == "--tp")         launch.thirdPerson = true;
+        else if (a == "--zone")       launch.startZone = atoi(next());
     }
 
     LogOpenFile(LogFilePath());

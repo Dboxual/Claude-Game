@@ -20,4 +20,6 @@ private:
     Mesh dome = {};
     Material mat = {};
     int locSunDir = 0, locZenith = 0, locHorizon = 0, locSunColor = 0, locTime = 0;
+    bool uniformCacheValid = false;
+    Vector3 cachedSunDir = {}, cachedZenith = {}, cachedHorizon = {}, cachedSunColor = {};
 };

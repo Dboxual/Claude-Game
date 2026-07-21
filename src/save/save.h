@@ -13,6 +13,7 @@ struct SaveData {
     int anima = 0;               // collected wisps
     int blessings = 0;           // shrines communed
     float playtime = 0.0f;       // seconds
+    int currentZone = 4;         // zone id (DEFAULT_ZONE = Elder Vale)
 };
 
 namespace SaveSystem {

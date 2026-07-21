@@ -1,6 +1,7 @@
 // Game owns every system and the top-level state machine. App stays
 // ignorant of gameplay; systems stay ignorant of each other (game/ is the
-// only glue layer). See ARCHITECTURE.md.
+// only glue layer). World content lives inside ZoneManager's current
+// ZoneInstance. See ARCHITECTURE.md and CODEX_HANDOFF.md.
 #pragma once
 #include <string>
 #include "audio/audio.h"
@@ -16,15 +17,14 @@
 #include "settings/settings.h"
 #include "ui/hud.h"
 #include "ui/ui.h"
-#include "world/interact.h"
-#include "world/terrain.h"
-#include "world/world.h"
+#include "zone/zone_manager.h"
 
 struct GameLaunchOptions {
     int smokeFrames = 0;         // >0: run N frames then request quit
     std::string screenshotPath;  // captured near the end of a smoke run
     bool autoplay = false;       // scripted movement for soak tests
     bool thirdPerson = false;    // start in third person (smoke validation)
+    int startZone = -1;          // --zone N: skip title into this zone
 };
 
 enum class GameState { Title, Playing, Paused, SettingsMenu };
@@ -39,17 +39,15 @@ public:
     bool WantsQuit() const { return wantQuit; }
 
 private:
-    // flow
     void StartPlaying(bool fromSave);
     void SaveNow();
     void SetMouseCapture(bool on);
     void ApplySettingsDiffs();
+    float EffectiveViewDistance() const;
 
-    // per-state update
     void UpdateTitle(float dt);
     void UpdatePlaying(float dt);
 
-    // draw
     void DrawFrame(float dt);
     void DrawUiLayer(float dt);
     void DrawPlayerBody(Vector3 feet);
@@ -61,13 +59,11 @@ private:
     GameState settingsReturn = GameState::Title;
 
     InputSystem input;
-    Settings settings, prevSettings;    // prev = applied-state for diffing
+    Settings settings, prevSettings;
     AudioSystem audio;
     Renderer renderer;
     PostFx postfx;
-    Terrain terrain;
-    World world;
-    InteractionSystem interact;
+    ZoneManager zones;
     ParticleSystem particles;
     PlayerController player;
     CameraRig camRig;
@@ -77,8 +73,8 @@ private:
     FixedClock simClock;
     Camera3D camera = {};
 
-    SaveData session;                   // live progress (anima, blessings, playtime)
-    int currentTarget = -1;             // interactable under the gaze, or -1
+    SaveData session;
+    int currentTarget = -1;
     float time = 0.0f;
     float smoothDt = 1.0f / 60.0f;
     int lastSimSteps = 0;
@@ -87,7 +83,8 @@ private:
     bool mouseCaptured = false;
     bool wantQuit = false;
     float autoplayJumpTimer = 0.0f;
-    int wispChain = 0;                  // rising-pitch pickup combo
+    float gateCooldown = 0.0f;   // autoplay: don't bounce straight back
+    int wispChain = 0;
     float wispChainTimer = 0.0f;
     float titleOrbit = 0.0f;
 };

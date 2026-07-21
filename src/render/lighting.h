@@ -38,4 +38,11 @@ private:
     int locSunDir = 0, locSunColor = 0, locSkyAmb = 0, locGroundAmb = 0;
     int locFogColor = 0, locFogDensity = 0, locCamPos = 0, locEmissive = 0;
     int locLightCount = 0, locLightPos = 0, locLightColor = 0, locLightRange = 0;
+
+    bool frameCacheValid = false;
+    Vector3 cachedSunDir = {}, cachedSunColor = {}, cachedSkyAmbient = {};
+    Vector3 cachedGroundAmbient = {}, cachedFogColor = {};
+    float cachedFogDensity = 0.0f;
+    int cachedLightCount = -1;
+    PointLight cachedLights[MAX_POINT_LIGHTS] = {};
 };

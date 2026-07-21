@@ -4,21 +4,23 @@
 // Works identically in both cameras: targeting uses the camera eye+forward.
 #pragma once
 #include "raylib.h"
+#include <string>
 #include <vector>
 
 class ParticleSystem;
 class Renderer;
 
-enum class InteractType { HeartShrine, Wayshrine };
+enum class InteractType { HeartShrine, Wayshrine, ZoneGate };
 
 struct Interactable {
     InteractType type;
-    Vector3 pos;             // focus point (the crystal), not the base
+    Vector3 pos;             // focus point (crystal / portal center)
     float radius = 3.4f;     // interaction reach from the player
     int lightIndex = -1;     // world light this boosts when activated
     float rearm = 0.0f;      // seconds until usable again
     float glow = 0.0f;       // 0..1 activation flash, decays; drives light boost
-    const char* verb = "Commune";
+    std::string verb = "Commune";
+    int payload = -1;        // ZoneGate: index into the ZoneDef gate list
 };
 
 // A reward mote: drifts briefly, then homes to the player with rising speed.
